@@ -119,8 +119,24 @@ def _failing_baseline_policy():
     return ScriptedPolicy(["I'm thinking about what to do." for _ in range(50)])
 
 
+def _pick_device_dtype():
+    """Choose the best available device + dtype.
+
+    Order of preference: CUDA fp16 → Apple MPS fp32 → CPU fp32. MPS+fp16
+    has historically been flaky for Qwen-class models; fp32 is safer on
+    M-series and the model is small enough that it still fits.
+    """
+    import torch
+
+    if torch.cuda.is_available():
+        return torch.device("cuda"), torch.float16
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps"), torch.float32
+    return torch.device("cpu"), torch.float32
+
+
 def _load_hf_policy(cfg: TrainConfig):
-    """Construct an HfPolicy backed by Qwen2.5-0.5B-Instruct."""
+    """Construct an HfPolicy backed by the configured model."""
     from graphforge.training import HfPolicy
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -128,16 +144,14 @@ def _load_hf_policy(cfg: TrainConfig):
     if tok.pad_token_id is None:
         tok.pad_token = tok.eos_token
 
-    import torch
-
-    dtype = torch.float16 if torch.cuda.is_available() else torch.float32
+    device, dtype = _pick_device_dtype()
+    print(f"[train] device={device} dtype={dtype}")
     model = AutoModelForCausalLM.from_pretrained(
         cfg.model_name,
         torch_dtype=dtype,
         trust_remote_code=True,
     )
-    if torch.cuda.is_available():
-        model = model.to("cuda")
+    model = model.to(device)
     model.eval()
     return HfPolicy(
         model=model,
@@ -180,6 +194,10 @@ def _run_sft(cfg: TrainConfig, model, tok, examples: list[dict[str, str]]) -> di
         )
         model = get_peft_model(model, lora)
 
+    # TRL's SFTConfig has churned between 0.10/0.11/0.12+: max_seq_length
+    # was removed, dataset_text_field moved between SFTConfig and SFTTrainer.
+    # We pass only the universally-accepted kwargs and let the trainer
+    # auto-detect "text" from the dataset.
     sft_cfg = SFTConfig(
         output_dir=str(out_dir),
         num_train_epochs=cfg.epochs,
@@ -190,17 +208,25 @@ def _run_sft(cfg: TrainConfig, model, tok, examples: list[dict[str, str]]) -> di
         save_strategy="epoch",
         report_to="none",
         bf16=False,
-        fp16=False,  # let device pick; lora handles safely
-        max_seq_length=2048,
-        dataset_text_field="text",
+        fp16=False,
     )
 
-    trainer = SFTTrainer(
-        model=model,
-        args=sft_cfg,
-        train_dataset=ds,
-        tokenizer=tok,
-    )
+    # ``tokenizer`` was renamed to ``processing_class`` in transformers 4.46+
+    # / TRL 0.12+. Try the new name first, fall back to old.
+    try:
+        trainer = SFTTrainer(
+            model=model,
+            args=sft_cfg,
+            train_dataset=ds,
+            processing_class=tok,
+        )
+    except TypeError:
+        trainer = SFTTrainer(
+            model=model,
+            args=sft_cfg,
+            train_dataset=ds,
+            tokenizer=tok,
+        )
     trainer.train()
 
     loss_history: list[float] = []
