@@ -189,26 +189,29 @@ def reward_fn(
 
         # Level 2 — valid JSON, check kind
         kind = action_dict.get("kind", "")
-        if kind in ("update_node", "add_node"):
-            base = 0.2
-        elif kind in ("query", "inspect", "submit", "remove_node"):
-            base = 0.1
-        else:
+        if kind not in ("query", "inspect", "add_node", "update_node",
+                        "remove_node", "submit"):
             rewards.append(0.05)
             continue
 
-        # Level 3 — execute the action
-        if kind == "submit":
-            try:
-                env = RepoEditEnvironment()
-                env.reset(task_id=tid)
-                action = parse_action(action_dict)
-                _, r, _ = env.step(action)
+        # Level 3 — execute through env so malformed actions score lower
+        try:
+            env = RepoEditEnvironment()
+            env.reset(task_id=tid)
+            action = parse_action(action_dict)
+            _, r, done = env.step(action)
+            if done:
                 rewards.append(0.9 if r > 0.5 else 0.0)
-            except Exception:
-                rewards.append(0.0)
-        else:
-            rewards.append(base)
+            elif kind in ("add_node", "update_node"):
+                rewards.append(0.2)   # edit action ran without error
+            else:
+                rewards.append(0.1)   # query/inspect ran without error
+        except Exception:
+            # Action was parsed but failed to execute (missing fields, wrong ids…)
+            if kind in ("add_node", "update_node"):
+                rewards.append(0.05)  # tried to edit but malformed
+            else:
+                rewards.append(0.02)  # other action failed
     return rewards
 
 
