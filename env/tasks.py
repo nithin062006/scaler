@@ -201,6 +201,136 @@ _reg(RepoTask(
 ))
 
 
+# ── Humanize tasks (real-world library) ──────────────────────────────────────
+
+_reg(RepoTask(
+    task_id="t4.intpercent",
+    repo_name="humanize",
+    description=textwrap.dedent("""\
+        Add a function `intpercent(value: float, decimal_places: int = 1) -> str`
+        to `number.py`.
+
+        The function should convert a fraction to a percentage string:
+          0.0   → "0.0%"
+          0.5   → "50.0%"
+          0.753 → "75.3%"
+          1.0   → "100.0%"
+
+        Use `decimal_places` to control how many digits appear after the decimal.
+        If decimal_places=0, return an integer percentage with no decimal point.
+    """).strip(),
+    test_code=textwrap.dedent("""\
+        from graphforge.sample_repos.humanize.number import intpercent
+        assert intpercent(0.0)   == "0.0%",   f"got {intpercent(0.0)!r}"
+        assert intpercent(0.5)   == "50.0%",  f"got {intpercent(0.5)!r}"
+        assert intpercent(0.753) == "75.3%",  f"got {intpercent(0.753)!r}"
+        assert intpercent(1.0)   == "100.0%", f"got {intpercent(1.0)!r}"
+        assert intpercent(0.5, decimal_places=0) == "50%", f"got {intpercent(0.5, decimal_places=0)!r}"
+    """).strip(),
+    max_turns=12,
+    difficulty=0,
+    hints=[
+        "Look at number.py — the existing functions show the style to follow.",
+        "Use f-string formatting: f'{value * 100:.{decimal_places}f}%'",
+    ],
+))
+
+_reg(RepoTask(
+    task_id="t5.naturalfilecount",
+    repo_name="humanize",
+    description=textwrap.dedent("""\
+        Add a function `naturalfilecount(n: int) -> str` to `filesize.py`.
+
+        The function should return a human-readable file count:
+          0  → "no files"
+          1  → "1 file"
+          2  → "2 files"
+          99 → "99 files"
+    """).strip(),
+    test_code=textwrap.dedent("""\
+        from graphforge.sample_repos.humanize.filesize import naturalfilecount
+        assert naturalfilecount(0)  == "no files", f"got {naturalfilecount(0)!r}"
+        assert naturalfilecount(1)  == "1 file",   f"got {naturalfilecount(1)!r}"
+        assert naturalfilecount(2)  == "2 files",  f"got {naturalfilecount(2)!r}"
+        assert naturalfilecount(99) == "99 files", f"got {naturalfilecount(99)!r}"
+    """).strip(),
+    max_turns=12,
+    difficulty=0,
+    hints=[
+        "Look at filesize.py — naturalsize is the only function there.",
+        "This is a short function: handle n==0, n==1, and n>1 as three cases.",
+    ],
+))
+
+_reg(RepoTask(
+    task_id="t6.metric",
+    repo_name="humanize",
+    description=textwrap.dedent("""\
+        Add a function `metric(value: float, unit: str = "") -> str` to `number.py`.
+
+        The function should format a number using SI metric prefixes:
+          1_500_000 → "1.5 M"
+          2_000     → "2.0 k"
+          500       → "500"   (no prefix below 1000)
+
+        Supported prefixes (largest to smallest): T (10¹²), G (10⁹), M (10⁶), k (10³).
+        If a unit is provided, append it after the prefix: metric(1500, "Hz") → "1.5 kHz".
+        Always format the scaled number to 1 decimal place.
+    """).strip(),
+    test_code=textwrap.dedent("""\
+        from graphforge.sample_repos.humanize.number import metric
+        assert metric(1_500_000) == "1.5 M",   f"got {metric(1_500_000)!r}"
+        assert metric(2_000)     == "2.0 k",   f"got {metric(2_000)!r}"
+        assert metric(500)       == "500",      f"got {metric(500)!r}"
+        assert metric(1_500, "Hz") == "1.5 kHz", f"got {metric(1_500, 'Hz')!r}"
+        assert metric(2e9, "W")    == "2.0 GW",  f"got {metric(2e9, 'W')!r}"
+    """).strip(),
+    max_turns=15,
+    difficulty=1,
+    hints=[
+        "Loop through prefixes from largest to smallest: (1e12,'T'), (1e9,'G'), (1e6,'M'), (1e3,'k').",
+        "If abs(value) >= threshold, scale and format; otherwise return str(int(value)).",
+    ],
+))
+
+_reg(RepoTask(
+    task_id="t7.age",
+    repo_name="humanize",
+    description=textwrap.dedent("""\
+        Add a function `age(birth_date) -> str` to `time.py`.
+
+        The function receives a `datetime.date` and returns a human-readable age:
+          - If the person is under 1 year old, return "X months old" (use 30-day months).
+          - If exactly 1 year, return "1 year old".
+          - Otherwise return "X years old".
+
+        Use `datetime.date.today()` as the reference point.
+        Assume birth_date is always a valid date in the past.
+    """).strip(),
+    test_code=textwrap.dedent("""\
+        import datetime as dt
+        from graphforge.sample_repos.humanize.time import age
+
+        today = dt.date.today()
+        dob_25y  = today.replace(year=today.year - 25)
+        dob_1y   = today.replace(year=today.year - 1)
+        dob_6m   = today - dt.timedelta(days=182)
+        dob_2m   = today - dt.timedelta(days=61)
+
+        assert age(dob_25y) == "25 years old", f"got {age(dob_25y)!r}"
+        assert age(dob_1y)  == "1 year old",   f"got {age(dob_1y)!r}"
+        assert age(dob_6m)  == "6 months old", f"got {age(dob_6m)!r}"
+        assert age(dob_2m)  == "2 months old", f"got {age(dob_2m)!r}"
+    """).strip(),
+    max_turns=15,
+    difficulty=1,
+    hints=[
+        "import datetime as dt is already at the top of time.py.",
+        "days = (dt.date.today() - birth_date).days; years = days // 365; months = days // 30",
+    ],
+))
+
+
 # ── test runner ───────────────────────────────────────────────────────────────
 
 def run_tests(task: RepoTask) -> tuple[bool, str]:
