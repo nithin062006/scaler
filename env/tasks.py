@@ -48,32 +48,34 @@ def _reg(task: RepoTask) -> RepoTask:
     return task
 
 
-# ── Task 0: add validate_priority ────────────────────────────────────────────
+# ── Task 0: add validate_due_date ────────────────────────────────────────────
 
 _reg(RepoTask(
-    task_id="t0.validate_priority",
+    task_id="t0.validate_due_date",
     repo_name="task_manager",
     description=textwrap.dedent("""\
-        Add a function `validate_priority(priority: str) -> bool` to
-        `validators.py`.
+        Add a function `validate_due_date(due_date) -> bool` to `validators.py`.
 
-        The function should return True if priority is exactly one of:
-          "low", "medium", or "high"
-        and False for any other value (including empty string, None, etc.).
+        The function should return True if:
+          - due_date is None (no deadline), OR
+          - due_date is a datetime.date instance
+
+        It should return False for any other type (strings, integers, etc.).
     """).strip(),
     test_code=textwrap.dedent("""\
-        from graphforge.sample_repos.task_manager.validators import validate_priority
-        assert validate_priority("low")    is True,  "low should be valid"
-        assert validate_priority("medium") is True,  "medium should be valid"
-        assert validate_priority("high")   is True,  "high should be valid"
-        assert validate_priority("urgent") is False, "urgent is not valid"
-        assert validate_priority("")       is False, "empty string is not valid"
-        assert validate_priority("HIGH")   is False, "case-sensitive"
+        from datetime import date
+        from graphforge.sample_repos.task_manager.validators import validate_due_date
+        assert validate_due_date(None)            is True,  "None is valid (no deadline)"
+        assert validate_due_date(date(2025, 1, 1)) is True,  "date object is valid"
+        assert validate_due_date("2025-01-01")    is False, "string is not valid"
+        assert validate_due_date(20250101)        is False, "int is not valid"
+        assert validate_due_date([])              is False, "list is not valid"
     """).strip(),
     max_turns=12,
     hints=[
-        "Look in validators.py — it already has VALID_PRIORITIES defined.",
-        "The function signature should be: def validate_priority(priority: str) -> bool",
+        "Look in validators.py to see the style of existing validators.",
+        "The function signature should be: def validate_due_date(due_date) -> bool",
+        "Import datetime.date inside the function or at the top of validators.py.",
     ],
 ))
 

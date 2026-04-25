@@ -18,3 +18,8 @@ def validate_tags(tags: object) -> bool:
 def validate_email(email: str) -> bool:
     """Return True if email looks like a valid address (contains @ and .)."""
     return isinstance(email, str) and "@" in email and "." in email.split("@")[-1]
+
+
+def validate_priority(priority: str) -> bool:
+    """Return True if priority is one of 'low', 'medium', or 'high'."""
+    return priority in VALID_PRIORITIES

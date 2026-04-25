@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from graphforge.sample_repos.task_manager.models import Task
 from graphforge.sample_repos.task_manager.storage import TaskStore
-from graphforge.sample_repos.task_manager.validators import validate_tags, validate_title
+from graphforge.sample_repos.task_manager.validators import validate_priority, validate_tags, validate_title
 
 _store = TaskStore()
 
