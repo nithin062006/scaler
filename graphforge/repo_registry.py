@@ -26,6 +26,7 @@ class RepoSpec:
 
 
 REGISTRY: list[RepoSpec] = [
+    # ── string / text ────────────────────────────────────────────────────────
     RepoSpec(
         name="humanize",
         url="https://github.com/jmoiron/humanize.git",
@@ -33,10 +34,24 @@ REGISTRY: list[RepoSpec] = [
         n_tasks=6,
     ),
     RepoSpec(
+        name="wcwidth",
+        url="https://github.com/jquast/wcwidth.git",
+        src_hint="wcwidth",
+        n_tasks=6,
+    ),
+    RepoSpec(
+        name="inflect",
+        url="https://github.com/jaraco/inflect.git",
+        src_hint="inflect",
+        n_tasks=4,
+    ),
+
+    # ── iteration / functional ───────────────────────────────────────────────
+    RepoSpec(
         name="boltons",
         url="https://github.com/mahmoud/boltons.git",
         src_hint="boltons",
-        n_tasks=8,
+        n_tasks=10,
     ),
     RepoSpec(
         name="more-itertools",
@@ -45,9 +60,45 @@ REGISTRY: list[RepoSpec] = [
         n_tasks=8,
     ),
     RepoSpec(
-        name="wcwidth",
-        url="https://github.com/jquast/wcwidth.git",
-        src_hint="wcwidth",
+        name="toolz",
+        url="https://github.com/pytoolz/toolz.git",
+        src_hint="toolz",
+        n_tasks=6,
+    ),
+
+    # ── data transformation / ETL ────────────────────────────────────────────
+    RepoSpec(
+        name="petl",
+        url="https://github.com/petl-developers/petl.git",
+        src_hint="src/petl",
+        n_tasks=8,
+    ),
+    RepoSpec(
+        name="pydash",
+        url="https://github.com/dgilland/pydash.git",
+        src_hint="src/pydash",
+        n_tasks=8,
+    ),
+
+    # ── numeric / math ───────────────────────────────────────────────────────
+    RepoSpec(
+        name="num2words",
+        url="https://github.com/savoirfairelinux/num2words.git",
+        src_hint="num2words",
+        n_tasks=6,
+    ),
+
+    # ── parsing / serialisation ──────────────────────────────────────────────
+    RepoSpec(
+        name="parse",
+        url="https://github.com/r1chardj0n3s/parse.git",
+        src_hint=".",
+        n_tasks=6,
+    ),
+    RepoSpec(
+        name="dateutil",
+        url="https://github.com/dateutil/dateutil.git",
+        src_hint="dateutil",
         n_tasks=6,
     ),
 ]
