@@ -80,28 +80,10 @@ REGISTRY: list[RepoSpec] = [
         n_tasks=8,
     ),
 
-    # ── numeric / math ───────────────────────────────────────────────────────
-    RepoSpec(
-        name="num2words",
-        url="https://github.com/savoirfairelinux/num2words.git",
-        src_hint="num2words",
-        n_tasks=6,
-    ),
-
-    # ── parsing / serialisation ──────────────────────────────────────────────
-    RepoSpec(
-        name="parse",
-        url="https://github.com/r1chardj0n3s/parse.git",
-        src_hint=".",
-        n_tasks=6,
-    ),
-    RepoSpec(
-        name="dateutil",
-        url="https://github.com/dateutil/dateutil.git",
-        src_hint="dateutil",
-        n_tasks=6,
-    ),
 ]
+
+# Repos that were evaluated and produced 0 tasks (no literal-eval-able doctests):
+#   num2words, parse, dateutil — omitted from REGISTRY
 
 
 def _find_src(clone_dir: str, hint: str) -> str:
