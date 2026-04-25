@@ -229,103 +229,103 @@ def plot_summary_panel(
     history: Any,
     out_path: Path,
 ) -> Path:
-    """4-panel summary figure: loss · reward curve · histogram · domain bars.
+    """4-panel summary figure for README / paper.
 
-    Designed for the README / paper — one image that tells the full story.
+    A: GRPO loss curve (real training data)
+    B: Mean reward before vs. after (bar chart)
+    C: Pass rate before vs. after (bar chart)
+    D: Graduated reward ladder (explains the training signal)
     """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    steps_r, rewards = _extract_series(history, "reward")
-    steps_l, losses  = _extract_series(history, "loss")
-    base_all  = [r for rs in baseline.get("per_task", {}).values() for r in rs]
-    train_all = [r for rs in trained.get("per_task", {}).values() for r in rs]
-    base_mu   = float(np.mean(base_all))  if base_all  else 0.0
-    train_mu  = float(np.mean(train_all)) if train_all else 0.0
+    steps_l, losses = _extract_series(history, "loss")
+    base_mu  = float(baseline.get("mean",      0.0))
+    train_mu = float(trained.get("mean",       0.0))
+    base_pr  = float(baseline.get("pass_rate", 0.0))
+    train_pr = float(trained.get("pass_rate",  0.0))
 
-    fig = plt.figure(figsize=(14, 9))
-    gs  = gridspec.GridSpec(2, 2, figure=fig, hspace=0.42, wspace=0.35)
+    fig = plt.figure(figsize=(13, 8))
+    gs  = gridspec.GridSpec(2, 2, figure=fig, hspace=0.48, wspace=0.38)
 
-    # ── panel A: loss ─────────────────────────────────────────────────────────
-    ax_loss = fig.add_subplot(gs[0, 0])
+    # ── A: GRPO loss curve ────────────────────────────────────────────────────
+    ax_a = fig.add_subplot(gs[0, 0])
     if steps_l:
-        ax_loss.plot(steps_l, losses, color=_ORANGE, alpha=0.3, linewidth=1.0)
-        ax_loss.plot(steps_l, _smooth(losses), color=_ORANGE, linewidth=2.2,
-                     label="smoothed loss")
-    ax_loss.set_xlabel("Training step")
-    ax_loss.set_ylabel("Cross-entropy loss")
-    ax_loss.set_title("A  Training Loss")
-    ax_loss.legend(fontsize=9)
-    ax_loss.grid(True, alpha=0.2)
+        ax_a.plot(steps_l, losses, color=_ORANGE, alpha=0.30, linewidth=1.0,
+                  label="per-step loss")
+        ax_a.plot(steps_l, _smooth(losses), color=_ORANGE, linewidth=2.2,
+                  label=f"rolling avg (w={max(3, len(losses)//8)})")
+        ax_a.axhline(0, color="black", linewidth=0.6, linestyle="--")
+    ax_a.set_xlabel("Training step")
+    ax_a.set_ylabel("GRPO policy gradient loss")
+    ax_a.set_title("A  Training Loss")
+    ax_a.legend(fontsize=8, loc="upper right")
+    ax_a.grid(True, alpha=0.2)
 
-    # ── panel B: reward curve ─────────────────────────────────────────────────
-    ax_rew = fig.add_subplot(gs[0, 1])
-    if steps_r:
-        ax_rew.plot(steps_r, rewards, color=_BLUE, alpha=0.3, linewidth=1.0)
-        ax_rew.plot(steps_r, _smooth(rewards), color=_BLUE, linewidth=2.2,
-                    label="smoothed reward")
-        ax_rew.axhline(np.mean(rewards), color=_GRAY, linestyle="--",
-                       linewidth=1.0, label=f"mean={np.mean(rewards):.3f}")
-    ax_rew.set_xlabel("Training step")
-    ax_rew.set_ylabel("Reward  [0.0 – 1.0]")
-    ax_rew.set_ylim(-0.15, 1.05)
-    ax_rew.set_title("B  GRPO Reward During Training")
-    ax_rew.legend(fontsize=9)
-    ax_rew.grid(True, alpha=0.2)
+    # ── B: mean reward before vs after ───────────────────────────────────────
+    ax_b = fig.add_subplot(gs[0, 1])
+    labels = ["Before GRPO", "After GRPO"]
+    vals   = [base_mu, train_mu]
+    colors = [_GRAY, _BLUE]
+    bars   = ax_b.bar(labels, vals, color=colors, edgecolor="white", width=0.45)
+    for bar, v in zip(bars, vals):
+        ypos = (v + 0.015) if v >= 0 else (v - 0.03)
+        ax_b.text(bar.get_x() + bar.get_width() / 2, ypos, f"{v:.3f}",
+                  ha="center", va="bottom" if v >= 0 else "top",
+                  fontsize=13, fontweight="bold")
+    ax_b.axhline(0, color="black", linewidth=0.8)
+    ax_b.set_ylabel("Mean episode reward")
+    ax_b.set_ylim(-0.20, max(train_mu + 0.12, 0.35))
+    ax_b.set_title(f"B  Mean Reward  (Δ = {train_mu - base_mu:+.3f})")
+    ax_b.grid(True, axis="y", alpha=0.2)
 
-    # ── panel C: histogram ────────────────────────────────────────────────────
-    ax_hist = fig.add_subplot(gs[1, 0])
-    bins = np.linspace(-0.15, 1.05, 13)
-    ax_hist.hist(base_all, bins=bins, alpha=0.65, color=_GRAY,
-                 label=f"Before  μ={base_mu:.3f}", edgecolor="white")
-    ax_hist.hist(train_all, bins=bins, alpha=0.70, color=_BLUE,
-                 label=f"After   μ={train_mu:.3f}", edgecolor="white")
-    ax_hist.axvline(base_mu,  color=_GRAY, linestyle="--", linewidth=1.5)
-    ax_hist.axvline(train_mu, color=_BLUE, linestyle="--", linewidth=1.5)
-    ax_hist.set_xlabel("Episode reward  [0.0 – 1.0]")
-    ax_hist.set_ylabel("Number of episodes")
-    ax_hist.set_title("C  Reward Distribution: Before vs. After GRPO")
-    ax_hist.legend(fontsize=9)
-    ax_hist.grid(True, alpha=0.2)
+    # ── C: pass rate before vs after ─────────────────────────────────────────
+    ax_c = fig.add_subplot(gs[1, 0])
+    vals_pr = [base_pr * 100, train_pr * 100]
+    bars_pr = ax_c.bar(labels, vals_pr, color=colors, edgecolor="white", width=0.45)
+    for bar, v in zip(bars_pr, vals_pr):
+        ax_c.text(bar.get_x() + bar.get_width() / 2, v + 0.5, f"{v:.1f}%",
+                  ha="center", va="bottom", fontsize=13, fontweight="bold")
+    ax_c.set_ylabel("Pass rate  (%)")
+    ax_c.set_ylim(0, max(train_pr * 100 + 8, 35))
+    ax_c.set_title(f"C  Pass Rate  (Δ = {(train_pr - base_pr)*100:+.1f} pp)")
+    ax_c.grid(True, axis="y", alpha=0.2)
 
-    # ── panel D: domain bar chart ─────────────────────────────────────────────
-    ax_dom = fig.add_subplot(gs[1, 1])
+    # ── D: reward ladder ──────────────────────────────────────────────────────
+    ax_d = fig.add_subplot(gs[1, 1])
+    ladder_labels = [
+        "Submit — tests pass",
+        "add_node / update_node OK",
+        "query / inspect OK",
+        "Valid JSON, known kind",
+        "Has structure, bad JSON",
+        "Submit — tests fail",
+        "No recognisable structure",
+    ]
+    ladder_vals   = [0.90, 0.20, 0.10, 0.05, 0.02, 0.00, -0.10]
+    ladder_colors = [
+        "#2ca02c", _BLUE, "#aec7e8", "#c5b0d5", "#c49c94", _GRAY, "#d62728"
+    ]
+    y_pos = range(len(ladder_labels))
+    hbars = ax_d.barh(list(y_pos), ladder_vals, color=ladder_colors,
+                      edgecolor="white", height=0.6)
+    for bar, v in zip(hbars, ladder_vals):
+        xpos = v + 0.01 if v >= 0 else v - 0.01
+        ha   = "left"   if v >= 0 else "right"
+        ax_d.text(xpos, bar.get_y() + bar.get_height() / 2,
+                  f"{v:+.2f}", va="center", ha=ha, fontsize=9, fontweight="bold")
+    ax_d.set_yticks(list(y_pos))
+    ax_d.set_yticklabels(ladder_labels, fontsize=8)
+    ax_d.axvline(0, color="black", linewidth=0.8)
+    ax_d.set_xlabel("Reward value")
+    ax_d.set_xlim(-0.25, 1.1)
+    ax_d.set_title("D  Graduated Reward Ladder")
+    ax_d.grid(True, axis="x", alpha=0.2)
 
-    def _domain(tid: str) -> str:
-        parts = tid.split(".")
-        return parts[1] if len(parts) >= 3 and parts[0] == "auto" else "built-in"
-
-    all_tids = sorted(set(baseline.get("per_task", {})) | set(trained.get("per_task", {})))
-    domains: dict[str, list[str]] = {}
-    for tid in all_tids:
-        domains.setdefault(_domain(tid), []).append(tid)
-
-    domain_labels = sorted(domains)
-    base_dm, train_dm = [], []
-    for d in domain_labels:
-        tids = domains[d]
-        bv = [r for t in tids for r in baseline.get("per_task", {}).get(t, [])]
-        tv = [r for t in tids for r in trained.get("per_task", {}).get(t, [])]
-        base_dm.append(float(np.mean(bv)) if bv else 0.0)
-        train_dm.append(float(np.mean(tv)) if tv else 0.0)
-
-    x = np.arange(len(domain_labels))
-    w = 0.35
-    ax_dom.bar(x - w/2, base_dm,  w, color=_GRAY,  label="Before GRPO", edgecolor="white")
-    ax_dom.bar(x + w/2, train_dm, w, color=_BLUE, label="After GRPO",  edgecolor="white")
-    ax_dom.set_xticks(x)
-    ax_dom.set_xticklabels(domain_labels, rotation=30, ha="right")
-    ax_dom.set_ylabel("Mean episode reward  [0.0 – 1.0]")
-    ax_dom.set_ylim(0, 1.2)
-    ax_dom.set_title("D  Per-domain Mean Reward")
-    ax_dom.legend(fontsize=9)
-    ax_dom.grid(True, axis="y", alpha=0.2)
-
-    delta = train_mu - base_mu
     fig.suptitle(
-        f"GraphForge GRPO Training Summary  ·  Qwen2.5-0.5B  ·  Δ μ-reward = {delta:+.3f}",
-        fontsize=13, fontweight="bold",
+        "GraphForge  ·  Qwen2.5-0.5B + LoRA (r=16)  ·  GRPO  ·  56 tasks, 3 epochs",
+        fontsize=12, fontweight="bold",
     )
-    fig.savefig(out_path, dpi=150)
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     return out_path
