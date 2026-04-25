@@ -6,8 +6,9 @@ Submission for the Meta PyTorch OpenEnv Hackathon × Scaler School of Technology
 
 | | |
 | --- | --- |
+| **Repo** | https://github.com/nithin062006/scaler |
 | **Live env (HF Space)** | _link added after deployment_ |
-| **Training notebook** | [`training/notebook.ipynb`](./training/notebook.ipynb) (Colab T4) |
+| **Training notebook** | [Open in Colab](https://colab.research.google.com/github/nithin062006/scaler/blob/main/training/notebook.ipynb) · [`training/notebook.ipynb`](./training/notebook.ipynb) |
 | **Writeup** | [`docs/WRITEUP.md`](./docs/WRITEUP.md) |
 | **Plots** | [`plots/`](./plots/) |
 
