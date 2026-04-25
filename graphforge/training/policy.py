@@ -80,17 +80,25 @@ class HfPolicy:
         import torch  # noqa: F401  — required for inputs / device
 
         tok = self.tokenizer
-        prompt_ids = tok.apply_chat_template(  # type: ignore[attr-defined]
-            messages, add_generation_prompt=True, return_tensors="pt"
+        # Render to text first, then tokenize. ``apply_chat_template`` 's
+        # return type drifted across transformers versions (sometimes a raw
+        # tensor, sometimes a BatchEncoding); going through ``tok(text)`` is
+        # the canonical pattern and works on all of them.
+        text = tok.apply_chat_template(  # type: ignore[attr-defined]
+            messages, add_generation_prompt=True, tokenize=False
         )
-        prompt_ids = prompt_ids.to(self.model.device)  # type: ignore[attr-defined]
-        out_ids = self.model.generate(  # type: ignore[attr-defined]
-            prompt_ids,
-            max_new_tokens=self.max_new_tokens,
-            do_sample=True,
-            temperature=self.temperature,
-            top_p=self.top_p,
-            pad_token_id=tok.eos_token_id,  # type: ignore[attr-defined]
-        )
-        gen = out_ids[0, prompt_ids.shape[-1]:]
+        inputs = tok(text, return_tensors="pt")  # type: ignore[operator]
+        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}  # type: ignore[attr-defined]
+
+        with torch.no_grad():
+            out_ids = self.model.generate(  # type: ignore[attr-defined]
+                **inputs,
+                max_new_tokens=self.max_new_tokens,
+                do_sample=True,
+                temperature=self.temperature,
+                top_p=self.top_p,
+                pad_token_id=tok.eos_token_id,  # type: ignore[attr-defined]
+            )
+        prompt_len = inputs["input_ids"].shape[-1]
+        gen = out_ids[0, prompt_len:]
         return tok.decode(gen, skip_special_tokens=True)  # type: ignore[attr-defined]
