@@ -1,33 +1,35 @@
 # OpenEnv manifest — required by the hackathon and by the OpenEnv spec.
 
-name: ast-code-edit
-version: 0.2.0
+name: repo-edit
+version: 0.3.0
 description: >
-  AST-based code-editing environment where an agent fills in stub Python
-  functions guided by a DAG representation of the module
-  (nodes = module / function / class / import;
-   edges = contains / calls / imports).
-  The agent is trained with GRPO + LoRA to maximise a reward combining
-  compilation success and test-case pass rate.
+  Multi-turn repository-editing environment for long-horizon RL.
+  An LLM agent receives a Knowledge Graph of a real Python repo
+  (nodes: repo / package / module / class / function / method;
+   edges: contains / calls / imports / inherits — all parsed from AST)
+  and must navigate it across multiple turns to apply a code change.
+  Reward is sparse: only granted when submit() passes all unit tests.
+  Designed to push agents beyond shallow reasoning toward structured
+  planning, graph navigation, and durable state tracking.
 
 client:
-  class_name: ASTCodeEditEnv
+  class_name: RepoEditEnv
   module: env.client
 
 action:
-  class_name: CodeEditAction
-  module: env.models
+  class_name: RepoEditAction
+  module: env.actions
 
 observation:
-  class_name: CodeEditObservation
+  class_name: RepoEditObservation
   module: env.models
 
 state:
-  class_name: CodeEditState
+  class_name: RepoEditState
   module: env.models
 
 environment:
-  class_name: ASTCodeEditEnvironment
+  class_name: RepoEditEnvironment
   module: env.environment
 
 default_image: ast-code-edit:latest

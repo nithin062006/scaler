@@ -1,204 +1,230 @@
-"""Task bank for the AST code-editing environment.
+"""Multi-turn repo-editing tasks.
 
-Each Task has a Python source file with one STUB function and a set of test
-cases. The environment presents the module as a DAG; the agent fills in the
-stub; the env compiles and runs the tests to compute the reward.
+Each Task specifies:
+  - A target repo to work on (points to a sample_repos/ subdir)
+  - A natural-language description of the change to make
+  - A set of test functions (Python code strings) that verify the change
+  - The maximum number of turns allowed
+
+Training tasks are deliberately structured to require multi-step navigation:
+  1. The agent must QUERY the graph to find relevant nodes
+  2. INSPECT nodes to understand the existing code
+  3. ADD or UPDATE nodes to implement the change
+  4. SUBMIT to trigger compilation + test execution
+
+This sparse reward structure forces the agent to develop structured planning
+and state tracking across long trajectories — the core theme of this project.
 """
 
 from __future__ import annotations
 
+import importlib.util
+import sys
 import textwrap
+import traceback
 from dataclasses import dataclass, field
+from pathlib import Path
+
+
+SAMPLE_REPOS_DIR = Path(__file__).resolve().parent.parent / "graphforge" / "sample_repos"
 
 
 @dataclass
-class TestCase:
-    args: tuple
-    kwargs: dict
-    expected: object
-    description: str = ""
-
-    def __post_init__(self) -> None:
-        if isinstance(self.args, list):
-            self.args = tuple(self.args)
-
-
-@dataclass
-class Task:
+class RepoTask:
     task_id: str
-    description: str
-    module_name: str
-    source_code: str       # full Python source; stub marked with # STUB
-    target_function: str   # name of function to implement
-    test_cases: list[TestCase] = field(default_factory=list)
-    difficulty: int = 0    # 0=easy, 1=medium, 2=hard
+    repo_name: str                    # subdirectory name under sample_repos/
+    description: str                  # natural-language task for the agent
+    test_code: str                    # Python code that tests the change
+    max_turns: int = 15
+    difficulty: int = 0               # 0=easy, 1=medium, 2=hard
+    hints: list[str] = field(default_factory=list)
 
 
-TASK_BANK: dict[str, Task] = {}
+TASK_BANK: dict[str, RepoTask] = {}
 
 
-def _reg(task: Task) -> Task:
+def _reg(task: RepoTask) -> RepoTask:
     TASK_BANK[task.task_id] = task
     return task
 
 
-# ── Task 0: palindrome ────────────────────────────────────────────────────────
+# ── Task 0: add validate_priority ────────────────────────────────────────────
 
-_reg(Task(
-    task_id="t0.palindrome",
-    description="Implement is_palindrome(s) — returns True if s reads the same forwards and backwards.",
-    module_name="string_utils",
-    source_code=textwrap.dedent("""\
-        def reverse_string(s: str) -> str:
-            return s[::-1]
+_reg(RepoTask(
+    task_id="t0.validate_priority",
+    repo_name="task_manager",
+    description=textwrap.dedent("""\
+        Add a function `validate_priority(priority: str) -> bool` to
+        `validators.py`.
 
-
-        def is_palindrome(s: str) -> bool:
-            # STUB
-            raise NotImplementedError
-
-
-        def check_word(word: str) -> str:
-            label = "a palindrome" if is_palindrome(word) else "not a palindrome"
-            return f"{word} is {label}"
-    """),
-    target_function="is_palindrome",
-    test_cases=[
-        TestCase(("racecar",), {}, True),
-        TestCase(("hello",), {}, False),
-        TestCase(("",), {}, True),
-        TestCase(("abcba",), {}, True),
-        TestCase(("python",), {}, False),
+        The function should return True if priority is exactly one of:
+          "low", "medium", or "high"
+        and False for any other value (including empty string, None, etc.).
+    """).strip(),
+    test_code=textwrap.dedent("""\
+        from graphforge.sample_repos.task_manager.validators import validate_priority
+        assert validate_priority("low")    is True,  "low should be valid"
+        assert validate_priority("medium") is True,  "medium should be valid"
+        assert validate_priority("high")   is True,  "high should be valid"
+        assert validate_priority("urgent") is False, "urgent is not valid"
+        assert validate_priority("")       is False, "empty string is not valid"
+        assert validate_priority("HIGH")   is False, "case-sensitive"
+    """).strip(),
+    max_turns=12,
+    hints=[
+        "Look in validators.py — it already has VALID_PRIORITIES defined.",
+        "The function signature should be: def validate_priority(priority: str) -> bool",
     ],
 ))
 
-# ── Task 1: fibonacci ─────────────────────────────────────────────────────────
+# ── Task 1: add Task.is_overdue ───────────────────────────────────────────────
 
-_reg(Task(
-    task_id="t1.fibonacci",
-    description="Implement fibonacci(n) — returns the nth Fibonacci number (0-indexed, fib(0)=0, fib(1)=1).",
-    module_name="math_utils",
-    source_code=textwrap.dedent("""\
-        def fibonacci(n: int) -> int:
-            # STUB
-            raise NotImplementedError
+_reg(RepoTask(
+    task_id="t1.is_overdue",
+    repo_name="task_manager",
+    description=textwrap.dedent("""\
+        Add a method `is_overdue(self, today: date) -> bool` to the `Task`
+        class in `models.py`.
 
+        The method should return True if:
+          - the task has a due_date AND
+          - today is strictly after the due_date AND
+          - the task is not yet done
 
-        def fibonacci_sequence(length: int) -> list:
-            return [fibonacci(i) for i in range(length)]
+        It should return False if there is no due_date, or if the task is done,
+        or if today <= due_date.
+    """).strip(),
+    test_code=textwrap.dedent("""\
+        from datetime import date
+        from graphforge.sample_repos.task_manager.models import Task
 
+        t_past   = Task("x", "low", [], due_date=date(2020, 1, 1))
+        t_future = Task("y", "low", [], due_date=date(2099, 1, 1))
+        t_none   = Task("z", "low", [], due_date=None)
+        t_done   = Task("d", "low", [], due_date=date(2020, 1, 1))
+        t_done.complete()
 
-        def is_fibonacci_number(n: int) -> bool:
-            return n in fibonacci_sequence(20)
-    """),
-    target_function="fibonacci",
-    test_cases=[
-        TestCase((0,), {}, 0),
-        TestCase((1,), {}, 1),
-        TestCase((2,), {}, 1),
-        TestCase((5,), {}, 5),
-        TestCase((10,), {}, 55),
+        today = date.today()
+        assert t_past.is_overdue(today)   is True,  "past due date → overdue"
+        assert t_future.is_overdue(today) is False, "future due date → not overdue"
+        assert t_none.is_overdue(today)   is False, "no due date → not overdue"
+        assert t_done.is_overdue(today)   is False, "done task → not overdue"
+    """).strip(),
+    max_turns=15,
+    difficulty=1,
+    hints=[
+        "The Task class is in models.py.",
+        "The method should check self.due_date, today, and self.done.",
     ],
+))
+
+# ── Task 2: add TaskStore.find_by_tag ─────────────────────────────────────────
+
+_reg(RepoTask(
+    task_id="t2.find_by_tag",
+    repo_name="task_manager",
+    description=textwrap.dedent("""\
+        Add a method `find_by_tag(self, tag: str) -> list[Task]` to the
+        `TaskStore` class in `storage.py`.
+
+        The method should return a list of all tasks that have `tag` in
+        their `tags` list. Return an empty list if no tasks match.
+    """).strip(),
+    test_code=textwrap.dedent("""\
+        from graphforge.sample_repos.task_manager.models import Task
+        from graphforge.sample_repos.task_manager.storage import TaskStore
+
+        store = TaskStore()
+        store.add(Task("t1", "high",   ["python", "backend"], None))
+        store.add(Task("t2", "low",    ["frontend"],          None))
+        store.add(Task("t3", "medium", ["python"],            None))
+
+        result = store.find_by_tag("python")
+        assert len(result) == 2, f"Expected 2, got {len(result)}"
+        titles = {t.title for t in result}
+        assert titles == {"t1", "t3"}, f"Wrong titles: {titles}"
+
+        empty = store.find_by_tag("devops")
+        assert empty == [], f"Expected [], got {empty}"
+    """).strip(),
+    max_turns=15,
     difficulty=1,
 ))
 
-# ── Task 2: count_vowels ──────────────────────────────────────────────────────
+# ── Task 3 (hard): enforce priority validation in api.create_task ─────────────
 
-_reg(Task(
-    task_id="t2.count_vowels",
-    description="Implement count_vowels(text) — returns the number of vowels (a e i o u, case-insensitive) in text.",
-    module_name="text_utils",
-    source_code=textwrap.dedent("""\
-        VOWELS = set("aeiouAEIOU")
+_reg(RepoTask(
+    task_id="t3.enforce_priority",
+    repo_name="task_manager",
+    description=textwrap.dedent("""\
+        Update the `create_task` function in `api.py` so that it validates
+        the `priority` argument using `validate_priority` from `validators.py`.
 
+        If the priority is invalid, raise `ValueError` with a clear message.
+        The existing validations for title and tags must still work.
 
-        def is_vowel(char: str) -> bool:
-            return char in VOWELS
+        Note: `validate_priority` already exists in validators.py.
+        You must import and call it inside `create_task`.
+    """).strip(),
+    test_code=textwrap.dedent("""\
+        from graphforge.sample_repos.task_manager import api as _api
+        _api.reset_store()  # clean state between runs
 
+        # valid priority passes through
+        t = _api.create_task("Buy milk", priority="high")
+        assert t.priority == "high"
 
-        def count_vowels(text: str) -> int:
-            # STUB
-            raise NotImplementedError
+        # invalid priority raises ValueError
+        raised = False
+        try:
+            _api.create_task("Bad task", priority="urgent")
+        except ValueError:
+            raised = True
+        assert raised, "create_task should raise ValueError for invalid priority"
 
-
-        def vowel_ratio(text: str) -> float:
-            if not text:
-                return 0.0
-            return count_vowels(text) / len(text)
-    """),
-    target_function="count_vowels",
-    test_cases=[
-        TestCase(("hello",), {}, 2),
-        TestCase(("",), {}, 0),
-        TestCase(("xyz",), {}, 0),
-        TestCase(("aeiou",), {}, 5),
-        TestCase(("Hello World",), {}, 3),
-    ],
-))
-
-# ── Task 3: find_max ──────────────────────────────────────────────────────────
-
-_reg(Task(
-    task_id="t3.find_max",
-    description="Implement find_max(numbers) — returns the maximum value in a non-empty list without using built-in max().",
-    module_name="list_utils",
-    source_code=textwrap.dedent("""\
-        def find_max(numbers: list) -> float:
-            # STUB
-            raise NotImplementedError
-
-
-        def find_min(numbers: list) -> float:
-            return -find_max([-x for x in numbers])
-
-
-        def normalize(numbers: list) -> list:
-            m = find_max(numbers)
-            return [x / m for x in numbers] if m != 0 else list(numbers)
-    """),
-    target_function="find_max",
-    test_cases=[
-        TestCase(([1, 3, 2],), {}, 3),
-        TestCase(([-1, -3, -2],), {}, -1),
-        TestCase(([5],), {}, 5),
-        TestCase(([0, 0, 0],), {}, 0),
-        TestCase(([1, 2, 3, 4, 5],), {}, 5),
-    ],
-))
-
-# ── Task 4: flatten_list ──────────────────────────────────────────────────────
-
-_reg(Task(
-    task_id="t4.flatten",
-    description="Implement flatten_list(nested) — flattens one level of nesting from a list of lists.",
-    module_name="list_utils",
-    source_code=textwrap.dedent("""\
-        def is_nested(item: object) -> bool:
-            return isinstance(item, list)
-
-
-        def flatten_list(nested: list) -> list:
-            # STUB
-            raise NotImplementedError
-
-
-        def total_elements(nested: list) -> int:
-            return len(flatten_list(nested))
-    """),
-    target_function="flatten_list",
-    test_cases=[
-        TestCase(([[1, 2], [3, 4]],), {}, [1, 2, 3, 4]),
-        TestCase(([[1], [2], [3]],), {}, [1, 2, 3]),
-        TestCase(([[], [1, 2]],), {}, [1, 2]),
-        TestCase(([[],],), {}, []),
-        TestCase(([[1, 2, 3]],), {}, [1, 2, 3]),
+        # title validation still works
+        raised2 = False
+        try:
+            _api.create_task("", priority="low")
+        except ValueError:
+            raised2 = True
+        assert raised2, "create_task should still reject empty title"
+    """).strip(),
+    max_turns=18,
+    difficulty=2,
+    hints=[
+        "api.py already imports validate_title and validate_tags from validators.",
+        "You need to also import validate_priority and call it in create_task.",
     ],
 ))
 
 
-def get_task(task_id: str) -> Task | None:
-    return TASK_BANK.get(task_id)
+# ── test runner ───────────────────────────────────────────────────────────────
+
+def run_tests(task: RepoTask) -> tuple[bool, str]:
+    """Execute task.test_code and return (passed, message)."""
+    # Reload all task_manager modules to pick up any source-level changes
+    _reload_task_manager()
+    try:
+        exec(compile(task.test_code, "<test>", "exec"), {})  # noqa: S102
+        return True, "All assertions passed."
+    except AssertionError as exc:
+        return False, f"AssertionError: {exc}"
+    except Exception:
+        return False, traceback.format_exc(limit=5)
+
+
+def _reload_task_manager() -> None:
+    """Force-reload all task_manager submodules so edits take effect."""
+    prefix = "graphforge.sample_repos.task_manager"
+    to_reload = [k for k in sys.modules if k.startswith(prefix)]
+    for mod_name in to_reload:
+        del sys.modules[mod_name]
 
 
 def all_task_ids() -> list[str]:
     return list(TASK_BANK.keys())
+
+
+def get_task(task_id: str) -> RepoTask | None:
+    return TASK_BANK.get(task_id)

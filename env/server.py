@@ -1,9 +1,4 @@
-"""FastAPI server entry point for the AST code-editing environment.
-
-Run locally::
-
-    uvicorn env.server:app --port 8000
-"""
+"""FastAPI server for the multi-turn repo-editing environment."""
 
 from __future__ import annotations
 
@@ -11,63 +6,39 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 
-from env.environment import ASTCodeEditEnvironment
-from env.models import CodeEditAction, CodeEditObservation, CodeEditState
+from env.actions import RepoEditAction, parse_action
+from env.environment import RepoEditEnvironment
+from env.models import RepoEditObservation, RepoEditState
 
-_env = ASTCodeEditEnvironment()
-
-
-def _try_openenv_app() -> FastAPI | None:
-    try:
-        from openenv.server import create_server  # type: ignore
-        return create_server(_env)
-    except Exception:
-        try:
-            from openenv.core.env_server import create_fastapi_app as create_server  # type: ignore
-            return create_server(_env)
-        except Exception:
-            return None
+_env = RepoEditEnvironment()
 
 
-def _make_fallback_app() -> FastAPI:
-    app = FastAPI(
-        title="AST Code-Edit OpenEnv (fallback)",
-        version="0.2.0",
-        description="Single-step AST code-editing environment.",
-    )
+def _make_app() -> FastAPI:
+    app = FastAPI(title="Repo-Edit OpenEnv", version="0.3.0")
 
-    @app.post("/reset", response_model=CodeEditObservation)
-    def reset() -> CodeEditObservation:
-        return _env.reset()
+    @app.post("/reset", response_model=RepoEditObservation)
+    def reset(task_id: str | None = None) -> RepoEditObservation:
+        return _env.reset(task_id=task_id)
 
     @app.post("/step")
-    def step(action: CodeEditAction) -> dict[str, Any]:
+    def step(action_dict: dict[str, Any]) -> dict[str, Any]:
         try:
+            action = parse_action(action_dict)
             obs, reward, done = _env.step(action)
-        except RuntimeError as exc:
+        except (ValueError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"observation": obs.model_dump(), "reward": reward, "done": done}
 
-    @app.get("/state", response_model=CodeEditState)
-    def state() -> CodeEditState:
+    @app.get("/state", response_model=RepoEditState)
+    def state() -> RepoEditState:
         return _env.get_state()
 
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
         return {"status": "ok"}
 
-    @app.get("/")
-    def index() -> dict[str, Any]:
-        return {
-            "name": "AST Code-Edit Environment",
-            "version": "0.2.0",
-            "endpoints": ["/reset", "/step", "/state", "/healthz"],
-        }
-
     return app
 
 
-_oa = _try_openenv_app()
-app: FastAPI = _oa if _oa is not None else _make_fallback_app()
-
+app = _make_app()
 __all__ = ["app"]
