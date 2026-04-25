@@ -202,8 +202,7 @@ class RepoEditEnvironment(
         (supports AutoTask from graphforge.task_generator).
         """
         if task is not None:
-            # Direct task object — supports AutoTask from generate_tasks()
-            pass
+            tid = task.task_id
         else:
             tid = task_id or self._configured_task_id or _pick_random_task()
             task = TASK_BANK.get(tid)
