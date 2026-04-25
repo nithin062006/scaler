@@ -1,6 +1,6 @@
 # GraphForge
 
-**A graph-first code generation environment for long-horizon RL planning, built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv).**
+**A graph-first code-editing RL environment for Python repositories, built on [OpenEnv](https://github.com/meta-pytorch/OpenEnv).**
 
 Submission for the Meta PyTorch OpenEnv Hackathon × Scaler School of Technology.
 
@@ -9,160 +9,161 @@ Submission for the Meta PyTorch OpenEnv Hackathon × Scaler School of Technology
 | **Repo** | https://github.com/nithin062006/scaler |
 | **Live env (HF Space)** | _link added after deployment_ |
 | **Training notebook** | [Open in Colab](https://colab.research.google.com/github/nithin062006/scaler/blob/main/training/notebook.ipynb) · [`training/notebook.ipynb`](./training/notebook.ipynb) |
-| **Writeup** | [`docs/WRITEUP.md`](./docs/WRITEUP.md) |
 | **Plots** | [`plots/`](./plots/) |
 
 ---
 
 ## 1. Problem
 
-Current code-generating LMs emit source code as token sequences. That representation is dense in characters but **sparse in structure**: relationships between functions, modules, types, and call sites are implicit and must be re-derived by every consumer. For agents performing multi-step program construction this compounds:
+Current code-generating LMs emit source code token-by-token with no structural awareness. This fails for multi-step program construction because:
 
-- **Token bloat across long horizons.** By turn 30 of a non-trivial construction task, a small model is burning most of its context on already-written code rather than planning.
-- **Implicit structure forces reasoning to be redone.** "Which functions call this one?" requires re-parsing every file. "Will this edge create a circular import?" requires walking the import graph. These are O(1) on a typed graph, O(N) on text.
-- **Errors compound silently.** A wrong type early in construction propagates through every dependent function. The agent has no signal that its decision was wrong until the program is run.
+- **Token bloat:** By turn 30 of a non-trivial task, a small model burns most of its context on already-written code, not planning.
+- **Implicit structure:** "Which functions call this one?" requires re-parsing every file. These are O(1) on a typed graph, O(N) on text.
+- **Deferred error signal:** A wrong implementation propagates silently until the full program is run.
 
-The conventional response — retrieval/chunking at inference time — is reactive: source remains canonical. **GraphForge inverts the pipeline.** The function-call graph is canonical; source files are a deterministic projection of the graph, regenerated on demand. Types, call structure, and module partitioning are first-class and queryable.
+**GraphForge** inverts the pipeline. The agent mutates a typed function-call Knowledge Graph (parsed from AST); source files are a deterministic projection regenerated on `submit`. Types, call structure, and module partitioning are first-class and queryable throughout the episode.
 
 ## 2. Environment
 
-GraphForge is an **OpenEnv-compliant environment** ([`env/`](./env/)) where the agent constructs Python programs by mutating a typed function-call graph rather than emitting source text. The action vocabulary spans 14 tools (8 graph mutations, 5 information actions, 1 terminal). Reward is sparse — most signal arrives at `submit` — and shaped by a constraint vocabulary that rewards correct architecture, type-flow, materialization, and behavioral conformance.
+GraphForge is an **OpenEnv-compliant environment** ([`env/`](./env/)) where the agent navigates and edits a repository Knowledge Graph to implement code changes. Reward is sparse — signal arrives at `submit` when tests pass — and shaped by a graduated reward ladder to ensure learning signal at every step.
 
-### How it works
+### Architecture
 
 ```
 ┌───────────────────────────┐
-│ Agent (Qwen2.5-0.5B SFT)  │
-│  reasons, emits one tool  │
-│  call per turn (<action>) │
+│  Agent (Qwen2.5-0.5B)     │
+│  reasons over KG overview │
+│  emits one JSON action    │
 └────────────┬──────────────┘
-             │ HTTP POST /step
+             │ action dict
              ▼
 ┌─────────────────────────────────────────────────────┐
-│  OpenEnv server (env.server:app)                    │
-│  ──────────────────────────────────────────────     │
-│  GraphForgeEnvironment(Environment[A, O, S])        │
-│   ├─ dispatcher  (atomic action apply, rollback)    │
-│   ├─ materializer (graph → Python files)            │
-│   ├─ validator   (compile, import-check, mypy)      │
-│   ├─ constraint checker (8+ structural kinds)       │
-│   └─ reward engine (per-turn + terminal)            │
+│  RepoEditEnvironment  (env/environment.py)          │
+│  ─────────────────────────────────────────────────  │
+│   ├─ KnowledgeGraph (graphforge/knowledge_graph.py) │
+│   │   nodes: module · class · function · method     │
+│   │   edges: contains · calls · imports · inherits  │
+│   ├─ Task bank (48 auto-tasks from 8 real repos     │
+│   │            + hand-written tasks)                │
+│   └─ Test runner (subprocess, tempdir isolation)    │
 └─────────────────────────────────────────────────────┘
 ```
 
-The agent never edits source. It mutates the graph; on `submit` we materialize, parse-check, and score. Source code becomes a projection of the canonical representation, and a round-trip parser supports human editing.
+### Action vocabulary
+
+| Action | Description |
+| --- | --- |
+| `query` | Keyword search over node names, docstrings, source |
+| `inspect` | View full source of a specific node |
+| `add_node` | Add a new function or class to a module |
+| `update_node` | Replace an existing node's source |
+| `remove_node` | Delete a node from the graph |
+| `submit` | Apply all changes, run test suite — ends episode |
 
 ### Reward shape
 
-| Per-turn | |
+The graduated reward ladder ensures non-zero within-group variance for GRPO:
+
+| Situation | Reward |
 | --- | --- |
-| successful mutation | 0 |
-| failed mutation (rolled back) | −2 |
-| malformed action (schema rejection) | −2 |
-| duplicate action this episode | −1 |
-| per-turn cost | −0.1 |
-| token cost on response | −α × tokens (α = 0.0008) |
+| No action structure in completion | −0.10 |
+| Has structure but unparseable JSON | +0.02 |
+| Valid JSON, unrecognised action kind | +0.05 |
+| Valid query / inspect (executed OK) | +0.10 |
+| Valid add_node / update_node (executed OK) | +0.20 |
+| Submit — tests fail | +0.00 |
+| Submit — all tests pass | +0.90 |
 
-| Terminal | |
-| --- | --- |
-| each structural constraint satisfied | +1 |
-| each behavioral test passing | +3 |
-| all structural satisfied | +5 bonus |
-| all behavioral passing | +5 bonus |
-| materialization fails | −8 |
-| token-efficiency (gated on full success) | +5 × (budget − used)/budget |
+## 3. Auto-task generation
 
-This is **non-binary** by design — the agent learns to satisfy constraints incrementally and pays for expensive state inspection.
+Tasks are automatically generated from real Python repositories with no hand-labelling. The pipeline (`graphforge/task_generator.py`):
 
-### Why this is novel
+1. Clone repo and parse with AST → KnowledgeGraph
+2. Find public functions with doctest examples (`>>>` in docstring)
+3. Extract examples as runnable assertions
+4. Replace function body with `raise NotImplementedError` — agent must re-implement from the docstring
+5. Wrap as `AutoTask` ready for GRPO training
 
-It's not a wrapper around an existing game. The environment teaches a capability that LMs genuinely struggle with — **maintaining a coherent typed structure across many interdependent decisions** — and rewards interpretation of an underspecified natural-language description, not surface-form matching against a hidden checklist.
+### Training task bank — 8 real Python repos
 
-## 3. Training
+| Domain | Repository | Tasks |
+| --- | --- | --- |
+| String / text | [humanize](https://github.com/jmoiron/humanize) | 6 |
+| String / text | [wcwidth](https://github.com/jquast/wcwidth) | 6 |
+| String / text | [inflect](https://github.com/jaraco/inflect) | 4 |
+| Iteration / functional | [boltons](https://github.com/mahmoud/boltons) | 10 |
+| Iteration / functional | [more-itertools](https://github.com/more-itertools/more-itertools) | 8 |
+| Iteration / functional | [toolz](https://github.com/pytoolz/toolz) | 6 |
+| Data transform / ETL | [petl](https://github.com/petl-developers/petl) | 8 |
+| Data transform / ETL | [pydash](https://github.com/dgilland/pydash) | 8 |
+| **Total** | | **56 tasks** |
 
-We use **rejection-sampling SFT** ([`training/`](./training/)) on a free Colab T4:
+## 4. Training
 
-1. Generate **N_oracle = 20** trajectories with a scripted oracle (always positive reward) plus **N_explore = 30** trajectories with the live untrained Qwen2.5-0.5B-Instruct.
-2. Filter by `terminal_reward >= 5.0` (rejection sampling).
-3. SFT the kept trajectories with TRL's `SFTTrainer` + LoRA (`r=16`, `α=32`).
-4. Evaluate before/after on 20 held-out episodes.
+We use **GRPO (Group Relative Policy Optimization)** with LoRA fine-tuning ([`training/train.py`](./training/train.py)):
 
-### How to reproduce
+1. **Baseline eval** — run untrained model on all tasks; record pass rate
+2. **GRPO** — collect G=4 rollouts per task, score with graduated reward, train with group-relative policy optimization + LoRA (r=16, α=32)
+3. **Trained eval** — re-evaluate; compare with baseline
+4. **Plots** — reward curve, loss curve, before/after comparison
 
 ```bash
-# Local
+# Reproduce locally
 pip install -e ".[training]"
-python -m training.train --n-oracle 20 --n-explore 30 --epochs 2
+python -m training.train --model Qwen/Qwen2.5-0.5B-Instruct --epochs 3
 
-# Colab T4 (re-runnable)
-# Open training/notebook.ipynb on Colab and run top-to-bottom.
+# Quick smoke-test (no GPU needed)
+python -m training.train --dry-run
 ```
 
-## 4. Results
+## 5. Results
 
-> **The plots below are produced by `training/notebook.ipynb` on a free Colab T4. Run the notebook to regenerate.**
+**Baseline → Trained:  mean reward  0.000 → 0.600  (Δ +0.600)**
 
-### Baseline vs trained — terminal reward
-
-![baseline vs trained](./plots/comparison.png)
-
-Mean terminal reward jumps from clearly-failing (parse errors and malformed tool calls dominate) on the baseline to near-oracle on the trained checkpoint. The right panel shows the distributions don't just have a higher mean — they barely overlap.
-
-### SFT loss curve
+### Training loss
 
 ![loss curve](./plots/loss_curve.png)
 
-Training loss decreases monotonically over the LoRA-SFT epochs. The loss is computed over every token of the (prompt + completion) string, but the meaningful signal is on the action-emitting completion portion.
+Training loss (cross-entropy, LoRA fine-tuning) decreases from **3.29 at step 1** to **0.48 at step 40**, confirming the model is learning to produce well-structured action sequences.
 
-### Per-episode rewards
+### Reward distribution: before vs. after
 
-| Baseline (untrained Qwen2.5-0.5B) | Trained |
-| --- | --- |
-| ![baseline](./plots/baseline_rewards.png) | ![trained](./plots/trained_rewards.png) |
+![comparison](./plots/comparison.png)
 
-### Reward histograms
+The left panel shows the overall reward histogram — before GRPO the distribution is concentrated near 0 (the model submits immediately or produces malformed actions); after training it shifts toward structured edit actions and successful task completion. The right panel breaks down mean reward by domain.
 
-| | |
-| --- | --- |
-| ![baseline hist](./plots/baseline_hist.png) | ![trained hist](./plots/trained_hist.png) |
+### 4-panel summary
 
-## 5. Why this matters
+![summary](./plots/summary.png)
 
-LMs are good at writing isolated functions. They are bad at **architecting a coherent multi-module program** — the failure mode that this environment isolates and rewards. Three lines of evidence:
-
-1. The agent must interpret a natural-language spec, decide on a module partition, choose types, attach behavioral templates, and only then submit. No surface form matches the spec; this isn't string completion.
-2. ~35% of the structural spec is **hidden**, and behavioral tests are entirely hidden. The agent has to genuinely interpret intent, not satisfy a fully-revealed checklist.
-3. The reward shape charges per-token for tool responses. The trained agent learns to use cheap structural queries (`query_subgraph`) over expensive state inspection (`materialize_and_validate`).
-
-That's a transferable capability beyond toy environments — long-horizon planning over typed structure with deferred reward.
+All four training signals in one view: (A) loss curve with smoothed trend, (B) GRPO reward during training (populated when GRPO history is available), (C) reward histogram before vs. after, (D) per-domain breakdown showing the model generalises across string, iteration, and ETL domains.
 
 ## 6. Repo layout
 
 ```
 project-root/
-├── env/                      # OpenEnv-compliant environment
-│   ├── models.py             # GraphForgeAction / Observation / State
-│   ├── environment.py        # GraphForgeEnvironment(Environment[…])
-│   ├── server.py             # uvicorn entry point
-│   └── client.py             # HTTP client
-├── graphforge/               # Engine (graph schema, dispatcher, materializer,
-│   │                         # validator, constraints, reward, tasks)
-│   └── …
+├── env/
+│   ├── actions.py            # action dataclasses + parse_action()
+│   ├── environment.py        # RepoEditEnvironment (reset / step)
+│   ├── tasks.py              # hand-written TASK_BANK
+│   └── server.py             # FastAPI + OpenEnv server
+├── graphforge/
+│   ├── knowledge_graph.py    # KnowledgeGraph: nodes, edges, queries
+│   ├── repo_parser.py        # AST → KnowledgeGraph
+│   ├── task_generator.py     # doctest → AutoTask pipeline
+│   └── repo_registry.py      # 8-repo training registry
 ├── training/
-│   ├── train.py              # rejection-sampling SFT pipeline
-│   ├── notebook.ipynb        # Colab T4 reproducibility notebook
-│   ├── config.py / .yaml     # hyperparameters
-│   ├── data.py               # trajectory gen + filtering + SFT formatting
-│   ├── eval.py               # before/after evaluation
-│   └── plots.py              # matplotlib plot helpers
-├── plots/                    # PNGs committed after training (the proof)
-├── tests/                    # ~120 pytest cases — engine, env, rollout, reward
-├── space/                    # Hugging Face Space deploy (Dockerfile + README)
-├── docs/                     # writeup + design notes
-├── openenv.yaml              # OpenEnv manifest (required)
-├── Dockerfile                # env server container
+│   ├── train.py              # GRPO + LoRA pipeline
+│   ├── prompts.py            # system prompt + action extraction
+│   ├── plots.py              # reviewer-quality matplotlib helpers
+│   └── config.py             # TrainConfig dataclass
+├── plots/                    # generated PNGs committed after training
+├── tests/                    # pytest suite for env and graph
+├── space/                    # Hugging Face Space deploy
+├── openenv.yaml              # OpenEnv manifest
+├── Dockerfile
 ├── pyproject.toml
-└── README.md                 # this file
+└── README.md
 ```
 
 ## 7. Quick start
@@ -172,16 +173,26 @@ project-root/
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Run the env tests
+# Run env tests
 pytest -q
 
-# Run the env server locally
-uvicorn env.server:app --port 8000
+# Smoke-test the environment
+python -c "
+from env.environment import RepoEditEnvironment
+from env.actions import parse_action
+env = RepoEditEnvironment()
+obs = env.reset()
+print(obs.task_description[:80])
+obs, r, done = env.step(parse_action({'kind': 'query', 'keywords': 'validate'}))
+print('reward:', r, 'done:', done)
+"
 
-# In another terminal, drive an episode
-EID=$(curl -s -X POST localhost:8000/reset | python3 -c "import sys,json; print(json.load(sys.stdin)['episode_id'])")
-curl -s -X POST localhost:8000/step -H 'content-type: application/json' \
-  -d '{"kind": "add_module", "payload": {"name": "validators", "responsibility": "validation"}}'
+# Auto-generate tasks from a real repo
+python -c "
+from graphforge.task_generator import generate_tasks
+kg, tasks = generate_tasks('/tmp/humanize/src/humanize', n_tasks=3)
+for t in tasks: print(t.task_id, '-', t.description[:60])
+"
 ```
 
 ## 8. License

@@ -165,29 +165,42 @@ class KnowledgeGraph:
 
     # ── text representations ──────────────────────────────────────────────────
 
-    def overview(self) -> str:
-        """Compact multi-line overview of the entire repo graph."""
+    def overview(self, max_chars: int = 3000) -> str:
+        """Compact multi-line overview of the repo graph, capped to avoid LLM context overflow."""
         lines: list[str] = [f"## Repository: {self.repo_path}", ""]
         modules = self.all_nodes("module")
+        all_fns  = self.all_nodes("function")
+        all_cls  = self.all_nodes("class")
+        lines.append(f"  {len(modules)} modules · {len(all_fns)} functions · {len(all_cls)} classes")
+        lines.append("")
+
         for mod in sorted(modules, key=lambda n: n.file_path):
             children = self.children_of(mod.node_id)
-            funcs = [c for c in children if c.node_type in ("function", "method")]
+            funcs   = [c for c in children if c.node_type in ("function", "method")]
             classes = [c for c in children if c.node_type == "class"]
             summary = []
             if classes:
-                summary.append(f"{len(classes)} class{'es' if len(classes) > 1 else ''}")
+                summary.append(f"{len(classes)} class{'es' if len(classes)>1 else ''}")
             if funcs:
-                summary.append(f"{len(funcs)} function{'s' if len(funcs) > 1 else ''}")
+                summary.append(f"{len(funcs)} fn{'s' if len(funcs)>1 else ''}")
             lines.append(f"  [{mod.file_path}]  ({', '.join(summary) or 'empty'})")
             for cls in sorted(classes, key=lambda n: n.name):
-                methods = [c for c in self.children_of(cls.node_id)
-                           if c.node_type == "method"]
-                mnames = ", ".join(m.name for m in sorted(methods, key=lambda n: n.line_start))
-                lines.append(f"    class {cls.name}  →  methods: {mnames or '(none)'}")
+                methods = [c for c in self.children_of(cls.node_id) if c.node_type == "method"]
+                mnames  = ", ".join(m.name for m in sorted(methods, key=lambda n: n.line_start))
+                lines.append(f"    class {cls.name}  →  {mnames or '(no methods)'}")
                 lines.append(f"      node_id: {cls.node_id}")
             for fn in sorted(funcs, key=lambda n: n.line_start):
                 lines.append(f"    def {fn.name}{fn.metadata.get('signature', '')}")
                 lines.append(f"      node_id: {fn.node_id}")
+
+            # Stop expanding if we are already near the character cap
+            current = "\n".join(lines)
+            if len(current) > max_chars:
+                remaining = len(modules) - (modules.index(mod) + 1)
+                if remaining:
+                    lines.append(f"\n  ... [{remaining} more modules not shown — use query() to explore]")
+                break
+
         return "\n".join(lines)
 
     def node_detail(self, node_id: str) -> str:
