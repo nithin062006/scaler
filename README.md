@@ -118,25 +118,27 @@ python -m training.train --dry-run
 
 ## 5. Results
 
-**Baseline → Trained:  mean reward  0.000 → 0.600  (Δ +0.600)**
+**Baseline → Trained:  mean reward  −0.074 → +0.182  (Δ +0.256)  ·  pass rate  8.9% → 23.2%**
 
-### Training loss
+Trained on a single GPU for ~1.6 hours: 56 tasks × 6 samples × 3 epochs = 1,008 GRPO steps.
+
+### Training loss (GRPO policy gradient, 1,008 steps)
 
 ![loss curve](./plots/loss_curve.png)
 
-Training loss (cross-entropy, LoRA fine-tuning) decreases from **3.29 at step 1** to **0.48 at step 40**, confirming the model is learning to produce well-structured action sequences.
+GRPO loss is the policy gradient objective — it oscillates around zero by design (positive = pushing toward higher-reward completions, negative = pushing away from below-mean completions, zero = no within-group variance that step). The smoothed trend line shows the signal across the full run.
 
-### Reward distribution: before vs. after
+### Before vs. after GRPO
 
 ![comparison](./plots/comparison.png)
 
-The left panel shows the overall reward histogram — before GRPO the distribution is concentrated near 0 (the model submits immediately or produces malformed actions); after training it shifts toward structured edit actions and successful task completion. The right panel breaks down mean reward by domain.
+Left: mean reward and pass rate before and after training. The baseline model produces mostly malformed outputs (mean reward −0.074); after GRPO it reliably emits structured JSON actions with 23.2% of episodes fully passing the doctest suite. Right: key metrics table.
 
 ### 4-panel summary
 
 ![summary](./plots/summary.png)
 
-All four training signals in one view: (A) loss curve with smoothed trend, (B) GRPO reward during training (populated when GRPO history is available), (C) reward histogram before vs. after, (D) per-domain breakdown showing the model generalises across string, iteration, and ETL domains.
+(A) GRPO loss curve with smoothed trend. (B) Reward signal during training. (C) Reward distribution before vs. after. (D) Per-domain breakdown — the model generalises across string, iteration, and ETL task families.
 
 ## 6. Repo layout
 
