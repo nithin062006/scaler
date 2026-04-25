@@ -1,0 +1,8 @@
+# This file exists so plots/ is committed even before training has run.
+# After running training/notebook.ipynb on Colab, replace this with:
+#   plots/baseline_rewards.png
+#   plots/trained_rewards.png
+#   plots/loss_curve.png
+#   plots/comparison.png
+#   plots/baseline_hist.png
+#   plots/trained_hist.png

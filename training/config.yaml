@@ -1,0 +1,28 @@
+# Default training run config (mirror of training.config.TrainConfig).
+# Useful for hackathon judges who want to re-run with one command.
+
+model_name: Qwen/Qwen2.5-0.5B-Instruct
+task_id: t0.email_validator
+
+# Trajectory generation
+n_oracle: 20
+n_explore: 30
+reward_threshold: 5.0
+
+# SFT
+epochs: 2
+learning_rate: 0.0001
+batch_size: 1
+gradient_accumulation_steps: 4
+use_lora: true
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+
+# Eval
+n_eval_episodes: 20
+
+# Output
+out_dir: outputs
+plots_dir: plots
+seed: 42

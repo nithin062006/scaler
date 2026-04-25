@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Envs
+.venv/
+venv/
+env/
+.env
+.envrc
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Training artifacts
+wandb/
+checkpoints/
+runs/
+outputs/
+*.ckpt
+*.safetensors
+*.bin
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Materialization scratch
+.materialize_cache/
