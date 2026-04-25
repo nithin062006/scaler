@@ -38,7 +38,7 @@ from typing import Any
 try:
     from unsloth import FastLanguageModel  # type: ignore
     _USE_UNSLOTH = True
-except ImportError:
+except Exception:
     _USE_UNSLOTH = False
 
 import torch
@@ -158,22 +158,57 @@ def reward_fn(
     task_ids: list[str] | None = None,
     **_: Any,
 ) -> list[float]:
-    """Score each completion by executing it as a single-action episode."""
+    """Graduated reward ladder so GRPO always has non-zero variance.
+
+      -0.1  no <action> tags at all
+       0.05 has <action> tags but invalid/unparseable JSON
+       0.1  valid JSON with any recognised action kind
+       0.2  update_node or add_node (shows edit intent)
+       0.0  submit that fails tests
+       0.9  submit that passes all tests
+    """
+    import re as _re
     rewards: list[float] = []
     for i, completion in enumerate(completions):
         tid = task_ids[i] if task_ids else all_task_ids()[0]
+
+        # Level 0 — no recognised format at all
+        has_block = bool(_re.search(r"```(?:json)?", completion))
+        has_tag   = bool(_re.search(r"<action>", completion))
+        has_kind  = any(k in completion for k in ("query", "inspect", "add_node",
+                                                   "update_node", "remove_node", "submit"))
+        if not has_block and not has_tag and not has_kind:
+            rewards.append(-0.1)
+            continue
+
+        # Level 1 — has some structure, check if parseable
         action_dict = extract_action_json(completion)
         if action_dict is None:
-            rewards.append(0.0)
+            rewards.append(0.02 if has_kind else -0.05)
             continue
-        try:
-            env = RepoEditEnvironment()
-            env.reset(task_id=tid)
-            action = parse_action(action_dict)
-            _, r, _ = env.step(action)
-            rewards.append(max(0.0, r))
-        except Exception:
-            rewards.append(0.0)
+
+        # Level 2 — valid JSON, check kind
+        kind = action_dict.get("kind", "")
+        if kind in ("update_node", "add_node"):
+            base = 0.2
+        elif kind in ("query", "inspect", "submit", "remove_node"):
+            base = 0.1
+        else:
+            rewards.append(0.05)
+            continue
+
+        # Level 3 — execute the action
+        if kind == "submit":
+            try:
+                env = RepoEditEnvironment()
+                env.reset(task_id=tid)
+                action = parse_action(action_dict)
+                _, r, _ = env.step(action)
+                rewards.append(0.9 if r > 0.5 else 0.0)
+            except Exception:
+                rewards.append(0.0)
+        else:
+            rewards.append(base)
     return rewards
 
 
