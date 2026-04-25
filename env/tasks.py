@@ -32,12 +32,13 @@ SAMPLE_REPOS_DIR = Path(__file__).resolve().parent.parent / "graphforge" / "samp
 @dataclass
 class RepoTask:
     task_id: str
-    repo_name: str                    # subdirectory name under sample_repos/
+    repo_name: str                    # package name (used as tempdir subdir)
     description: str                  # natural-language task for the agent
-    test_code: str                    # Python code that tests the change
+    test_code: str                    # Python assertions using short imports
     max_turns: int = 15
     difficulty: int = 0               # 0=easy, 1=medium, 2=hard
     hints: list[str] = field(default_factory=list)
+    repo_path: str | None = None      # if set, full path to repo source dir
 
 
 TASK_BANK: dict[str, RepoTask] = {}
@@ -64,7 +65,7 @@ _reg(RepoTask(
     """).strip(),
     test_code=textwrap.dedent("""\
         from datetime import date
-        from graphforge.sample_repos.task_manager.validators import validate_due_date
+        from task_manager.validators import validate_due_date
         assert validate_due_date(None)            is True,  "None is valid (no deadline)"
         assert validate_due_date(date(2025, 1, 1)) is True,  "date object is valid"
         assert validate_due_date("2025-01-01")    is False, "string is not valid"
@@ -98,7 +99,7 @@ _reg(RepoTask(
     """).strip(),
     test_code=textwrap.dedent("""\
         from datetime import date
-        from graphforge.sample_repos.task_manager.models import Task
+        from task_manager.models import Task
 
         t_past   = Task("x", "low", [], due_date=date(2020, 1, 1))
         t_future = Task("y", "low", [], due_date=date(2099, 1, 1))
@@ -133,8 +134,8 @@ _reg(RepoTask(
         their `tags` list. Return an empty list if no tasks match.
     """).strip(),
     test_code=textwrap.dedent("""\
-        from graphforge.sample_repos.task_manager.models import Task
-        from graphforge.sample_repos.task_manager.storage import TaskStore
+        from task_manager.models import Task
+        from task_manager.storage import TaskStore
 
         store = TaskStore()
         store.add(Task("t1", "high",   ["python", "backend"], None))
@@ -169,7 +170,7 @@ _reg(RepoTask(
         You must import and call it inside `create_task`.
     """).strip(),
     test_code=textwrap.dedent("""\
-        from graphforge.sample_repos.task_manager import api as _api
+        from task_manager import api as _api
         _api.reset_store()  # clean state between runs
 
         # valid priority passes through
@@ -220,7 +221,7 @@ _reg(RepoTask(
         If decimal_places=0, return an integer percentage with no decimal point.
     """).strip(),
     test_code=textwrap.dedent("""\
-        from graphforge.sample_repos.humanize.number import intpercent
+        from humanize.number import intpercent
         assert intpercent(0.0)   == "0.0%",   f"got {intpercent(0.0)!r}"
         assert intpercent(0.5)   == "50.0%",  f"got {intpercent(0.5)!r}"
         assert intpercent(0.753) == "75.3%",  f"got {intpercent(0.753)!r}"
@@ -248,7 +249,7 @@ _reg(RepoTask(
           99 → "99 files"
     """).strip(),
     test_code=textwrap.dedent("""\
-        from graphforge.sample_repos.humanize.filesize import naturalfilecount
+        from humanize.filesize import naturalfilecount
         assert naturalfilecount(0)  == "no files", f"got {naturalfilecount(0)!r}"
         assert naturalfilecount(1)  == "1 file",   f"got {naturalfilecount(1)!r}"
         assert naturalfilecount(2)  == "2 files",  f"got {naturalfilecount(2)!r}"
@@ -278,7 +279,7 @@ _reg(RepoTask(
         Always format the scaled number to 1 decimal place.
     """).strip(),
     test_code=textwrap.dedent("""\
-        from graphforge.sample_repos.humanize.number import metric
+        from humanize.number import metric
         assert metric(1_500_000) == "1.5 M",   f"got {metric(1_500_000)!r}"
         assert metric(2_000)     == "2.0 k",   f"got {metric(2_000)!r}"
         assert metric(500)       == "500",      f"got {metric(500)!r}"
@@ -309,7 +310,7 @@ _reg(RepoTask(
     """).strip(),
     test_code=textwrap.dedent("""\
         import datetime as dt
-        from graphforge.sample_repos.humanize.time import age
+        from humanize.time import age
 
         today = dt.date.today()
         dob_25y  = today.replace(year=today.year - 25)

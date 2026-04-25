@@ -195,13 +195,27 @@ class RepoEditEnvironment(
 
     # ----- OpenEnv contract ---------------------------------------------------
 
-    def reset(self, task_id: str | None = None) -> RepoEditObservation:
-        tid = task_id or self._configured_task_id or _pick_random_task()
-        task = TASK_BANK.get(tid)
-        if task is None:
-            raise ValueError(f"Unknown task_id: {tid!r}. Available: {all_task_ids()}")
+    def reset(self, task_id: str | None = None, task: Any = None) -> RepoEditObservation:
+        """Reset the environment.
 
-        repo_path = str(SAMPLE_REPOS_DIR / task.repo_name)
+        Pass either task_id (looks up TASK_BANK) or a task object directly
+        (supports AutoTask from graphforge.task_generator).
+        """
+        if task is not None:
+            # Direct task object — supports AutoTask from generate_tasks()
+            pass
+        else:
+            tid = task_id or self._configured_task_id or _pick_random_task()
+            task = TASK_BANK.get(tid)
+            if task is None:
+                raise ValueError(f"Unknown task_id: {tid!r}. Available: {all_task_ids()}")
+
+        # Resolve the repo path: use task.repo_path if set, else fall back to sample_repos/
+        if getattr(task, "repo_path", None):
+            repo_path = task.repo_path
+        else:
+            repo_path = str(SAMPLE_REPOS_DIR / task.repo_name)
+
         self._task = task
         self._kg = parse_repo(repo_path)
         self._episode_id = str(uuid.uuid4())[:8]
@@ -368,18 +382,12 @@ class RepoEditEnvironment(
         return f"[ERROR] unrecognised action type: {type(action)}", MALFORMED_PENALTY, False
 
     def _run_submit(self) -> tuple[str, float, bool]:
-        """Materialise changes into sys.modules, run tests, restore."""
+        """Write modified sources to a temp dir, run tests there, clean up."""
         kg = self._kg
         task = self._task
         assert kg is not None and task is not None
 
-        pkg_prefix = f"graphforge.sample_repos.{task.repo_name}"
-        _patch_modules(kg, pkg_prefix)
-        try:
-            reward, msg = _run_tests(task.test_code)
-        finally:
-            _restore_modules(pkg_prefix)
-
+        reward, msg = _run_tests_in_tempdir(kg, task.test_code, task.repo_name)
         return f"[SUBMIT RESULT]\n{msg}", reward, True
 
     def _terminal_obs(self, msg: str) -> RepoEditObservation:
@@ -414,60 +422,45 @@ def _find_module_for(kg: KnowledgeGraph, node_id: str) -> KGNode | None:
     return None
 
 
-def _patch_modules(kg: KnowledgeGraph, pkg_prefix: str) -> None:
-    """Compile & exec each modified module source, inject into sys.modules."""
-    import importlib
-    import types
+def _run_tests_in_tempdir(
+    kg: KnowledgeGraph, test_code: str, pkg_name: str
+) -> tuple[float, str]:
+    """Write mutated module sources to a temp dir, import from there, run tests.
 
-    # Backup original modules
-    _MODULE_BACKUP.clear()
-    for key, mod in list(sys.modules.items()):
-        if key.startswith(pkg_prefix):
-            _MODULE_BACKUP[key] = mod
+    This works for ANY Python repo — no hardcoded package paths needed.
+    The test_code must use short imports: `from <pkg_name>.<module> import ...`
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pkg_dir = Path(tmpdir) / pkg_name
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "__init__.py").write_text("")
 
-    # Remove stale cached copies
-    for key in list(sys.modules):
-        if key.startswith(pkg_prefix):
-            del sys.modules[key]
+        # Write each module's current (potentially mutated) source
+        for node in kg.all_nodes("module"):
+            if not node.file_path or node.file_path == "__init__.py":
+                continue
+            dest = pkg_dir / node.file_path
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(node.source, encoding="utf-8")
 
-    # For each module node in the KG, create a fresh module from modified source
-    for node in kg.all_nodes("module"):
-        if not node.file_path or node.file_path == "__init__.py":
-            continue
-        # e.g. file_path = "validators.py" → full_name = "graphforge.sample_repos.task_manager.validators"
-        stem = Path(node.file_path).stem
-        full_name = f"{pkg_prefix}.{stem}"
-        new_mod = types.ModuleType(full_name)
-        new_mod.__file__ = node.file_path
-        new_mod.__package__ = pkg_prefix
+        # Remove any stale cached copies of this package
+        stale = [k for k in sys.modules if k == pkg_name or k.startswith(pkg_name + ".")]
+        for k in stale:
+            del sys.modules[k]
+
+        sys.path.insert(0, tmpdir)
         try:
-            exec(compile(node.source, node.file_path, "exec"), new_mod.__dict__)  # noqa: S102
+            exec(compile(test_code, "<tests>", "exec"), {})  # noqa: S102
+            return 1.0, "✓ All tests passed!"
+        except AssertionError as exc:
+            return 0.0, f"✗ Test failed: {exc}"
         except Exception:
-            pass   # leave module partially populated; tests will catch it
-        sys.modules[full_name] = new_mod
-
-
-_MODULE_BACKUP: dict[str, Any] = {}
-
-
-def _restore_modules(pkg_prefix: str) -> None:
-    """Remove patched modules and restore originals from backup."""
-    for key in list(sys.modules):
-        if key.startswith(pkg_prefix):
-            del sys.modules[key]
-    sys.modules.update(_MODULE_BACKUP)
-    _MODULE_BACKUP.clear()
-
-
-def _run_tests(test_code: str) -> tuple[float, str]:
-    """Execute test_code in a clean namespace. Returns (reward, message)."""
-    try:
-        exec(compile(test_code, "<tests>", "exec"), {})  # noqa: S102
-        return 1.0, "✓ All tests passed!"
-    except AssertionError as exc:
-        return 0.0, f"✗ Test failed: {exc}"
-    except Exception:
-        return 0.0, f"✗ Exception during tests:\n{traceback.format_exc(limit=5)}"
+            return 0.0, f"✗ Exception during tests:\n{traceback.format_exc(limit=5)}"
+        finally:
+            sys.path.remove(tmpdir)
+            stale = [k for k in sys.modules if k == pkg_name or k.startswith(pkg_name + ".")]
+            for k in stale:
+                del sys.modules[k]
 
 
 def _pick_random_task() -> str:
