@@ -21,8 +21,7 @@ RUN pip install --no-cache-dir \
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
-ENV PORT=7860
 
 EXPOSE 7860
 
-CMD ["sh", "-c", "uvicorn env.server:app --host 0.0.0.0 --port ${PORT:-7860}"]
+CMD ["uvicorn", "env.server:app", "--host", "0.0.0.0", "--port", "7860"]
