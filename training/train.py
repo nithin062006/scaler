@@ -229,6 +229,18 @@ def _run_sft(cfg: TrainConfig, model, tok, examples: list[dict[str, str]]) -> di
         )
     trainer.train()
 
+    # Merge LoRA weights back into the base model so the original model
+    # reference (held by HfPolicy) sees the trained weights without any
+    # LoRA routing. Also restore eval mode + use_cache for generation.
+    if cfg.use_lora and hasattr(model, "merge_and_unload"):
+        try:
+            model.merge_and_unload()
+        except Exception as e:
+            print(f"[train] LoRA merge warning (non-fatal): {e}")
+    trainer.model.eval()
+    if hasattr(trainer.model, "config"):
+        trainer.model.config.use_cache = True
+
     loss_history: list[float] = []
     steps: list[int] = []
     for entry in trainer.state.log_history:

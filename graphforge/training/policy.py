@@ -79,6 +79,13 @@ class HfPolicy:
         # Defer heavy imports.
         import torch  # noqa: F401  — required for inputs / device
 
+        # Critical for trained-eval correctness: ensure the model is in
+        # eval mode (no dropout) and that KV-cache is enabled (post-SFT,
+        # gradient checkpointing may have set use_cache=False).
+        self.model.eval()  # type: ignore[attr-defined]
+        if hasattr(self.model, "config"):
+            self.model.config.use_cache = True  # type: ignore[attr-defined]
+
         tok = self.tokenizer
         # Render to text first, then tokenize. ``apply_chat_template`` 's
         # return type drifted across transformers versions (sometimes a raw
@@ -98,6 +105,7 @@ class HfPolicy:
                 temperature=self.temperature,
                 top_p=self.top_p,
                 pad_token_id=tok.eos_token_id,  # type: ignore[attr-defined]
+                use_cache=True,
             )
         prompt_len = inputs["input_ids"].shape[-1]
         gen = out_ids[0, prompt_len:]
