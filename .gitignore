@@ -13,10 +13,9 @@ htmlcov/
 build/
 dist/
 
-# Envs
+# Envs (virtual environments only — env/ is the OpenEnv package, NOT ignored)
 .venv/
 venv/
-env/
 .env
 .envrc
 

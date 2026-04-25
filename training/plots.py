@@ -1,74 +1,74 @@
-"""Plotting helpers — matplotlib only, hackathon-judge-friendly.
+"""Plotting helpers — matplotlib only, judge-friendly.
 
-Each plotting function:
-  * accepts plain Python data (no matplotlib types in the API),
-  * writes a PNG to ``plots_dir``,
-  * uses clearly-labeled axes with units.
-
-The four required plots per the rules:
-  1. reward curve (vs trajectory index during eval)
-  2. loss curve (vs training step during SFT)
-  3. baseline-vs-trained comparison (same chart)
-  4. terminal-reward histograms
-
-Returns the filepath of each saved plot for embedding in the README.
+Functions called by train.py
+-----------------------------
+  plot_reward_curve(history, out_path)        reward vs training step
+  plot_loss_curve(history, out_path)          loss vs training step
+  plot_baseline_vs_trained(base, trained, p)  before/after comparison
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 import matplotlib
 
-matplotlib.use("Agg")  # headless — Colab + CI safe
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
 
-def _ensure(path: Path) -> Path:
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _extract(history: list[dict[str, Any]], key: str) -> tuple[list[int], list[float]]:
+    steps, vals = [], []
+    for entry in history:
+        if key in entry and "step" in entry:
+            steps.append(int(entry["step"]))
+            vals.append(float(entry[key]))
+    return steps, vals
 
 
-def plot_eval_reward_curve(
-    rewards: Sequence[float],
-    *,
-    label: str,
-    out_path: Path,
-    title: str | None = None,
-) -> Path:
+# ── public API ────────────────────────────────────────────────────────────────
+
+def plot_reward_curve(history: list[dict[str, Any]], out_path: Path) -> Path:
+    """Reward vs training step (from GRPO log history)."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    steps, rewards = _extract(history, "reward")
+
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    xs = list(range(1, len(rewards) + 1))
-    ax.plot(xs, rewards, marker="o", linewidth=1.2, label=label)
-    if len(rewards) > 1:
-        running = np.cumsum(rewards) / np.arange(1, len(rewards) + 1)
-        ax.plot(xs, running, linestyle="--", linewidth=1.0, label="running mean")
-    ax.set_xlabel("Episode")
-    ax.set_ylabel("Terminal reward")
-    ax.set_title(title or f"Terminal reward per episode ({label})")
-    ax.grid(True, alpha=0.3)
+    if steps:
+        ax.plot(steps, rewards, marker="o", markersize=3, linewidth=1.2,
+                color="tab:blue", label="GRPO reward")
+        if len(rewards) >= 5:
+            window = max(3, len(rewards) // 8)
+            smoothed = np.convolve(rewards, np.ones(window) / window, mode="valid")
+            ax.plot(steps[window - 1:], smoothed, linewidth=2.0,
+                    color="tab:orange", label=f"smoothed (w={window})")
+    ax.set_xlabel("Training step")
+    ax.set_ylabel("Reward  [0 – 1]")
+    ax.set_title("GRPO reward during training")
+    ax.set_ylim(bottom=0, top=1.05)
     ax.legend(loc="best")
+    ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     return out_path
 
 
-def plot_loss_curve(
-    steps: Sequence[int],
-    losses: Sequence[float],
-    *,
-    out_path: Path,
-    title: str = "SFT training loss",
-) -> Path:
+def plot_loss_curve(history: list[dict[str, Any]], out_path: Path) -> Path:
+    """Loss vs training step."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    steps, losses = _extract(history, "loss")
+
     fig, ax = plt.subplots(figsize=(8, 4.5))
-    ax.plot(steps, losses, color="tab:red", linewidth=1.2)
+    if steps:
+        ax.plot(steps, losses, color="tab:red", linewidth=1.5)
     ax.set_xlabel("Training step")
-    ax.set_ylabel("Loss (cross-entropy)")
-    ax.set_title(title)
+    ax.set_ylabel("Loss")
+    ax.set_title("Training loss (GRPO)")
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
@@ -77,76 +77,54 @@ def plot_loss_curve(
 
 
 def plot_baseline_vs_trained(
-    *,
-    baseline_rewards: Sequence[float],
-    trained_rewards: Sequence[float],
+    baseline: dict[str, Any],
+    trained: dict[str, Any],
     out_path: Path,
 ) -> Path:
-    """Same-graph comparison — bars (mean ± std) and overlaid scatter."""
+    """Side-by-side comparison: per-task bars + overall mean."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
 
-    # Left: mean ± std bars.
+    task_ids = list(baseline.get("per_task", {}).keys())
+    base_means = [float(np.mean(baseline["per_task"].get(t, [0.0]))) for t in task_ids]
+    train_means = [float(np.mean(trained["per_task"].get(t, [0.0]))) for t in task_ids]
+
+    x = np.arange(len(task_ids))
+    width = 0.35
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+    # left: per-task bars
     ax = axes[0]
-    means = [float(np.mean(baseline_rewards)) if baseline_rewards else 0.0,
-             float(np.mean(trained_rewards)) if trained_rewards else 0.0]
-    stds = [float(np.std(baseline_rewards)) if baseline_rewards else 0.0,
-            float(np.std(trained_rewards)) if trained_rewards else 0.0]
-    bars = ax.bar(["Baseline", "Trained"], means, yerr=stds, capsize=6,
-                  color=["#888", "tab:blue"])
-    for b, m in zip(bars, means):
-        ax.text(b.get_x() + b.get_width() / 2, m, f"{m:.2f}",
-                ha="center", va="bottom", fontsize=10)
-    ax.set_ylabel("Mean terminal reward (± std)")
-    ax.set_title("Baseline vs trained — terminal reward")
+    b1 = ax.bar(x - width / 2, base_means, width, label="Before GRPO", color="#888")
+    b2 = ax.bar(x + width / 2, train_means, width, label="After GRPO", color="tab:blue")
+    for bar, val in zip(list(b1) + list(b2), base_means + train_means):
+        ax.text(bar.get_x() + bar.get_width() / 2, val + 0.01, f"{val:.2f}",
+                ha="center", va="bottom", fontsize=8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(task_ids, rotation=20, ha="right", fontsize=8)
+    ax.set_ylabel("Mean reward  [0 – 1]")
+    ax.set_ylim(0, 1.15)
+    ax.set_title("Per-task reward: before vs after GRPO")
+    ax.legend()
     ax.grid(True, axis="y", alpha=0.3)
 
-    # Right: histograms overlaid.
+    # right: overall scatter / distribution
     ax = axes[1]
-    bins = _shared_bins(baseline_rewards, trained_rewards, n=15)
-    ax.hist(baseline_rewards, bins=bins, alpha=0.55, label="Baseline", color="#888")
-    ax.hist(trained_rewards, bins=bins, alpha=0.65, label="Trained", color="tab:blue")
-    ax.set_xlabel("Terminal reward")
-    ax.set_ylabel("Episode count")
-    ax.set_title("Distribution of terminal reward")
+    base_all = [r for rs in baseline.get("per_task", {}).values() for r in rs]
+    train_all = [r for rs in trained.get("per_task", {}).values() for r in rs]
+    bins = np.linspace(0, 1, 12)
+    ax.hist(base_all, bins=bins, alpha=0.6, label=f"Before (μ={np.mean(base_all):.2f})",
+            color="#888")
+    ax.hist(train_all, bins=bins, alpha=0.7, label=f"After  (μ={np.mean(train_all):.2f})",
+            color="tab:blue")
+    ax.set_xlabel("Reward  [0 – 1]")
+    ax.set_ylabel("Count")
+    ax.set_title("Overall reward distribution")
+    ax.legend()
     ax.grid(True, alpha=0.3)
-    ax.legend(loc="best")
 
+    fig.suptitle("GRPO Training Results", fontsize=13, fontweight="bold")
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
     return out_path
-
-
-def plot_reward_histogram(
-    rewards: Sequence[float],
-    *,
-    label: str,
-    out_path: Path,
-) -> Path:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(7, 4))
-    if rewards:
-        ax.hist(rewards, bins=15, color="tab:blue", alpha=0.8)
-        ax.axvline(float(np.mean(rewards)), color="red", linestyle="--",
-                   linewidth=1.2, label=f"mean={np.mean(rewards):.2f}")
-        ax.legend()
-    ax.set_xlabel("Terminal reward")
-    ax.set_ylabel("Episode count")
-    ax.set_title(f"Reward distribution — {label}")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
-
-
-def _shared_bins(a: Sequence[float], b: Sequence[float], n: int = 15) -> np.ndarray:
-    pool = list(a) + list(b)
-    if not pool:
-        return np.linspace(-10, 20, n + 1)
-    lo = float(min(pool))
-    hi = float(max(pool))
-    if hi == lo:
-        hi = lo + 1.0
-    return np.linspace(lo - 0.5, hi + 0.5, n + 1)

@@ -30,10 +30,10 @@ behavioral = [
 training = [
     "torch>=2.2",
     "transformers>=4.42",
-    "trl>=0.9",
+    "trl>=0.12",
+    "peft>=0.11",
     "accelerate>=0.30",
     "datasets>=2.18",
-    "wandb>=0.17",
     "matplotlib>=3.8",
     "numpy>=1.26",
 ]

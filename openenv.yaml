@@ -1,53 +1,48 @@
 # OpenEnv manifest — required by the hackathon and by the OpenEnv spec.
-# https://meta-pytorch.org/OpenEnv/guides/environment-anatomy.html
 
-name: graphforge
-version: 0.1.0
+name: ast-code-edit
+version: 0.2.0
 description: >
-  Graph-first code generation environment for long-horizon RL planning.
-  The agent constructs Python programs by mutating a typed function-call
-  graph; source files are a deterministic projection of the canonical
-  graph. Tasks reward correct architecture, type-flow, materialization,
-  and behavioral conformance — not just final source matching.
+  AST-based code-editing environment where an agent fills in stub Python
+  functions guided by a DAG representation of the module
+  (nodes = module / function / class / import;
+   edges = contains / calls / imports).
+  The agent is trained with GRPO + LoRA to maximise a reward combining
+  compilation success and test-case pass rate.
 
-# Where the OpenEnv harness should look for client / action / observation
-# classes when introspecting the package.
 client:
-  class_name: GraphForgeEnv
+  class_name: ASTCodeEditEnv
   module: env.client
 
 action:
-  class_name: GraphForgeAction
+  class_name: CodeEditAction
   module: env.models
 
 observation:
-  class_name: GraphForgeObservation
+  class_name: CodeEditObservation
   module: env.models
 
 state:
-  class_name: GraphForgeState
+  class_name: CodeEditState
   module: env.models
 
 environment:
-  class_name: GraphForgeEnvironment
+  class_name: ASTCodeEditEnvironment
   module: env.environment
 
-# Container image used for deployment (HF Space build will tag this).
-default_image: graphforge:latest
-
-# OpenEnv manifest schema version.
+default_image: ast-code-edit:latest
 spec_version: 1
 
-# Tags to aid discovery in the OpenEnv hub.
 tags:
   - code-generation
-  - long-horizon-planning
+  - ast
+  - dag
+  - grpo
+  - lora
   - rl
-  - tool-use
-  - sparse-reward
   - python
+  - single-step
 
-# Author + license metadata.
-author: "Naga"
+author: "Naga Nithin"
 license: MIT
 homepage: "https://github.com/nithin062006/scaler"
