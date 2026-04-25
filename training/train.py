@@ -306,10 +306,17 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
     cfg.plots_dir.mkdir(parents=True, exist_ok=True)
 
+    # Auto-load tasks from all registered repos
+    from graphforge.repo_registry import load_all_tasks
+    auto_tasks = load_all_tasks(verbose=True)
+    for t in auto_tasks:
+        TASK_BANK[t.task_id] = t
+
     print(f"\n{'='*65}")
     print("Repo-Edit Agent  —  Multi-Turn GRPO Training")
     print(f"  model  : {cfg.model_name}")
-    print(f"  tasks  : {all_task_ids()}")
+    print(f"  tasks  : {len(all_task_ids())} total "
+          f"({len(auto_tasks)} auto + {len(all_task_ids())-len(auto_tasks)} hand-written)")
     print(f"  lora   : r={cfg.lora_r}, G={cfg.num_generations}")
     print(f"  dry_run: {cfg.dry_run}")
     print(f"{'='*65}\n")
