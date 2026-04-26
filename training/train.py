@@ -220,12 +220,14 @@ def evaluate_multiturn(
 ) -> dict[str, Any]:
     """Run one multi-turn episode per task; return pass counts and mean reward."""
     per_task: dict[str, list[float]] = {}
-    for tid in all_task_ids():
+    task_ids = all_task_ids()
+    for i, tid in enumerate(task_ids):
         rewards: list[float] = []
         for _ in range(cfg.n_eval_per_task):
             _, r = run_episode(model, tokenizer, tid, cfg)
             rewards.append(r)
         per_task[tid] = rewards
+        print(f"  eval [{i+1}/{len(task_ids)}] {tid}: mean={sum(rewards)/len(rewards):.3f}")
 
     all_r = [r for rs in per_task.values() for r in rs]
     return {
@@ -277,9 +279,18 @@ def load_model_and_tokenizer(cfg: TrainConfig) -> tuple[Any, Any]:
         tokenizer = AutoTokenizer.from_pretrained(cfg.model_name)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        n_gpus = torch.cuda.device_count() if device == "cuda" else 0
+        if n_gpus > 1:
+            max_mem = {i: f"{int(torch.cuda.get_device_properties(i).total_memory * 0.85 / 1e9)}GiB"
+                       for i in range(n_gpus)}
+            print(f"Using {n_gpus} GPUs: {max_mem}")
+            dm: dict = {"device_map": "auto", "max_memory": max_mem}
+        elif device == "cuda":
+            dm = {"device_map": "auto"}
+        else:
+            dm = {}
         model = AutoModelForCausalLM.from_pretrained(
-            cfg.model_name, torch_dtype=dtype,
-            device_map="auto" if device == "cuda" else None,
+            cfg.model_name, torch_dtype=dtype, **dm,
         )
         if device not in ("cuda",):
             model = model.to(device)
@@ -317,17 +328,25 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
     print(f"  dry_run: {cfg.dry_run}")
     print(f"{'='*65}\n")
 
-    # Baseline
-    print("── Baseline eval ──")
+    # Model load (always needed for GRPO)
     if cfg.dry_run:
-        baseline = dry_run_eval(pass_rate=0.0)
         model, tokenizer = None, None
     else:
         model, tokenizer = load_model_and_tokenizer(cfg)
-        baseline = evaluate_multiturn(model, tokenizer, cfg)
 
-    print(f"  mean reward : {baseline['mean']:.3f}")
-    print(f"  pass rate   : {baseline['pass_rate']:.1%}")
+    # Baseline eval (optional — skipped when skip_baseline_eval=True)
+    if cfg.skip_baseline_eval:
+        print("── Baseline eval skipped ──")
+        baseline = dry_run_eval(pass_rate=0.0)
+    elif cfg.dry_run:
+        print("── Baseline eval ──")
+        baseline = dry_run_eval(pass_rate=0.0)
+    else:
+        print("── Baseline eval ──")
+        baseline = evaluate_multiturn(model, tokenizer, cfg)
+        print(f"  mean reward : {baseline['mean']:.3f}")
+        print(f"  pass rate   : {baseline['pass_rate']:.1%}")
+
     (cfg.out_dir / "baseline_eval.json").write_text(json.dumps(baseline, indent=2))
 
     # GRPO

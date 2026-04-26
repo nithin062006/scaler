@@ -75,6 +75,8 @@ except Exception:
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
+_KG_CACHE: "dict[str, KnowledgeGraph]" = {}  # repo_path → KG; avoids re-parsing across episodes
+
 _QUERY_REWARD_BASE =  0.10   # turn 1 query reward; decays by 0.01/turn, floor 0.01
 MUTATION_REWARD   =  0.20
 SUBMIT_PASS       =  0.90
@@ -228,7 +230,10 @@ class RepoEditEnvironment(
             repo_path = str(SAMPLE_REPOS_DIR / task.repo_name)
 
         self._task = task
-        self._kg = parse_repo(repo_path)
+        import copy
+        if repo_path not in _KG_CACHE:
+            _KG_CACHE[repo_path] = parse_repo(repo_path)
+        self._kg = copy.deepcopy(_KG_CACHE[repo_path])
         self._episode_id = str(uuid.uuid4())[:8]
         self._turn = 0
         self._done = False

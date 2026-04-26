@@ -89,13 +89,14 @@ def main() -> None:
         temperature=0.9,
         out_dir=out_dir,
         plots_dir=plots_dir,
+        skip_baseline_eval=True,
     )
 
     print("=" * 60)
     print("GraphForge GRPO Training — HF Space")
     print("=" * 60)
 
-    _status["phase"] = "baseline eval"
+    _status["phase"] = "GRPO training"
     summary = run(cfg)
 
     baseline_mean = summary["baseline"]["mean"]

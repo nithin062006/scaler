@@ -36,6 +36,7 @@ class TrainConfig:
     plots_dir: Path = field(default_factory=lambda: Path("plots"))
     seed: int = 42
     dry_run: bool = False              # skip model load; use fixed completions
+    skip_baseline_eval: bool = False   # skip baseline; go straight to GRPO
 
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
