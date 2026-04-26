@@ -539,6 +539,18 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
                         print("[dbg] Patched grpo_accumulated_loss in compute_loss exec-ns")
                         _patched = True
 
+                    # nanmin / nanmax are used in compute_loss but may be missing
+                    # from the exec-namespace when the compiled cache was built against
+                    # a different TRL/Unsloth version.
+                    if "nanmin" not in _cl_fn.__globals__:
+                        def _nanmin(t):
+                            return t.nan_to_num(nan=float("inf")).min()
+                        def _nanmax(t):
+                            return t.nan_to_num(nan=float("-inf")).max()
+                        _cl_fn.__globals__["nanmin"] = _nanmin
+                        _cl_fn.__globals__["nanmax"] = _nanmax
+                        print("[patch] Injected nanmin/nanmax into compute_loss exec-ns")
+
                 # Patch via _ug_mod module-level attrs that are named compute_loss
                 for _attr_name in list(vars(_ug_mod)):
                     _attr = vars(_ug_mod)[_attr_name]
