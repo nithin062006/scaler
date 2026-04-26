@@ -468,16 +468,19 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
                 # Now attempt the patch on every location we found
                 _patched = False
 
-                # Print lines around crash point so we can see what's at 2463
+                # Print wide range of compiled cache to see branch structure
                 import os as _os
-                _cache_file = "unsloth_compiled_cache/UnslothGRPOTrainer.py"
+                _cache_file = getattr(_ug_mod, "__file__", None) or "unsloth_compiled_cache/UnslothGRPOTrainer.py"
                 if _os.path.exists(_cache_file):
                     with open(_cache_file) as _cf:
                         _clines = _cf.readlines()
-                    _lo, _hi = max(0, 2458-1), min(len(_clines), 2468)
-                    print(f"[dbg2463] lines {_lo+1}-{_hi} of compiled cache:")
+                    # Print 2360-2520 to see the full if/else branch and shared code
+                    _lo, _hi = max(0, 2360-1), min(len(_clines), 2520)
+                    print(f"[dbg_cache] lines {_lo+1}-{_hi} of compiled cache:")
                     for _i, _l in enumerate(_clines[_lo:_hi], _lo+1):
                         print(f"  {_i}: {_l.rstrip()}")
+                else:
+                    print(f"[dbg_cache] file not found: {_cache_file}")
 
                 _printed_once = [False]
                 def _make_compat_gal(orig):
