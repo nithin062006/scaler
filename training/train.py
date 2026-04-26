@@ -392,56 +392,21 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             seed=cfg.seed,
         )
 
-        # Unsloth compiled-cache bug fixes (both patches use the same mechanism:
-        # Python looks up module globals dynamically at call time, so replacing
-        # a function in _ug_mod's globals is picked up by all callers in that module).
+        # Bug 1 patch (module-global): grpo_compute_loss crashes when ref=None.
         if _USE_UNSLOTH:
             try:
                 import unsloth_compiled_cache.UnslothGRPOTrainer as _ug_mod
-
-                # Bug 1: grpo_compute_loss crashes when ref=None (beta=0 case).
-                # ref = new.detach() → KL = exp(0)-0-1 = 0 everywhere.
                 if not getattr(_ug_mod.grpo_compute_loss, "_ref_none_patched", False):
                     _orig_gcc = _ug_mod.grpo_compute_loss
                     def _safe_gcc(*args, **kwargs):
                         if len(args) >= 3 and args[2] is None:
-                            _a = list(args)
-                            _a[2] = _a[0].detach()
-                            args = tuple(_a)
+                            _a = list(args); _a[2] = _a[0].detach(); args = tuple(_a)
                         return _orig_gcc(*args, **kwargs)
                     _safe_gcc._ref_none_patched = True
                     _ug_mod.grpo_compute_loss = _safe_gcc
                     print("Patched grpo_compute_loss for None ref_logps")
-
-                # Bug 2: backwards-compat branch does a 5-var unpack of
-                # grpo_accumulated_loss() which now returns 6 values.
-                # compute_loss is exec()'d into a private namespace — NOT in
-                # GRPOTrainer.__dict__ and NOT sharing _ug_mod.__dict__ as its
-                # globals.  The only reliable path is:
-                #   _ug_mod.compute_loss.__globals__['grpo_accumulated_loss']
-                # which IS the exec-namespace the function actually uses.
-                _cl = getattr(_ug_mod, "compute_loss", None)
-                if _cl and callable(_cl) and hasattr(_cl, "__globals__"):
-                    _exec_gal = _cl.__globals__.get("grpo_accumulated_loss")
-                    if _exec_gal and not getattr(_exec_gal, "_compat5_patched", False):
-                        _orig_gal = _exec_gal
-                        def _compat_gal(*args, **kwargs):
-                            r = _orig_gal(*args, **kwargs)
-                            return tuple(r)[:5] if isinstance(r, (tuple, list)) and len(r) > 5 else r
-                        _compat_gal._compat5_patched = True
-                        _cl.__globals__["grpo_accumulated_loss"] = _compat_gal
-                        _ug_mod.grpo_accumulated_loss = _compat_gal  # keep module in sync
-                        print("Patched grpo_accumulated_loss in compute_loss exec-namespace")
-                    elif _exec_gal:
-                        pass  # already patched (same kernel session, same exec-ns)
-                    else:
-                        _keys = list(_cl.__globals__.keys())[:15]
-                        print(f"[warn] grpo_accumulated_loss missing from exec-ns (sample keys: {_keys})")
-                else:
-                    print(f"[warn] _ug_mod has no compute_loss attr")
-
             except Exception as _pe:
-                print(f"[warn] Unsloth cache patch skipped: {_pe}")
+                print(f"[warn] grpo_compute_loss patch failed: {_pe}")
 
         trainer = GRPOTrainer(
             model=model,
@@ -450,6 +415,84 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             train_dataset=dataset,
             processing_class=tokenizer,
         )
+
+        # Bug 2 patch: done AFTER trainer creation so we can walk type(trainer).__mro__
+        # to find the actual compute_loss function and its exec-namespace.
+        if _USE_UNSLOTH:
+            try:
+                import unsloth_compiled_cache.UnslothGRPOTrainer as _ug_mod
+
+                print(f"[dbg] trainer type: {type(trainer).__name__}")
+                print(f"[dbg] _ug_mod 'compute' names: {[k for k in dir(_ug_mod) if 'compute' in k.lower()]}")
+                print(f"[dbg] _ug_mod 'grpo/accum' names: {[k for k in dir(_ug_mod) if 'grpo' in k.lower() or 'accum' in k.lower()]}")
+
+                # Walk MRO to find the actual compute_loss function object
+                _cl_fn = None
+                for _mro_cls in type(trainer).__mro__:
+                    _entry = _mro_cls.__dict__.get("compute_loss")
+                    if _entry is not None:
+                        _cl_fn = _entry
+                        print(f"[dbg] compute_loss found in MRO class: {_mro_cls.__name__}")
+                        print(f"[dbg]   type: {type(_cl_fn)}")
+                        if callable(_cl_fn) and hasattr(_cl_fn, "__globals__"):
+                            print(f"[dbg]   __globals__ is _ug_mod.__dict__: {_cl_fn.__globals__ is vars(_ug_mod)}")
+                            _gal_in_ns = "grpo_accumulated_loss" in _cl_fn.__globals__
+                            print(f"[dbg]   'grpo_accumulated_loss' in __globals__: {_gal_in_ns}")
+                        break
+                else:
+                    print(f"[dbg] compute_loss NOT found in MRO: {[c.__name__ for c in type(trainer).__mro__]}")
+
+                # Also check trainer instance dict
+                _inst_cl = trainer.__dict__.get("compute_loss")
+                print(f"[dbg] compute_loss in trainer.__dict__: {_inst_cl is not None}")
+
+                # Check _ug_mod for class-like objects containing compute_loss
+                for _attr_name in dir(_ug_mod):
+                    _attr = getattr(_ug_mod, _attr_name, None)
+                    if isinstance(_attr, type) and hasattr(_attr, "compute_loss"):
+                        print(f"[dbg] class {_attr_name} in _ug_mod has compute_loss")
+                    if callable(_attr) and getattr(_attr, "__name__", "") == "compute_loss":
+                        print(f"[dbg] callable '{_attr_name}' in _ug_mod is named compute_loss")
+
+                # Now attempt the patch on every location we found
+                _patched = False
+
+                def _make_compat_gal(orig):
+                    def _compat(*a, **kw):
+                        r = orig(*a, **kw)
+                        return tuple(r)[:5] if isinstance(r, (tuple, list)) and len(r) > 5 else r
+                    _compat._compat5_patched = True
+                    return _compat
+
+                # Patch via MRO class
+                if _cl_fn and callable(_cl_fn) and hasattr(_cl_fn, "__globals__"):
+                    _exec_gal = _cl_fn.__globals__.get("grpo_accumulated_loss")
+                    if _exec_gal and not getattr(_exec_gal, "_compat5_patched", False):
+                        _compat_gal = _make_compat_gal(_exec_gal)
+                        _cl_fn.__globals__["grpo_accumulated_loss"] = _compat_gal
+                        print("[dbg] Patched via MRO-class compute_loss.__globals__")
+                        _patched = True
+                    elif _exec_gal:
+                        print("[dbg] MRO compute_loss.__globals__['grpo_accumulated_loss'] already patched")
+                        _patched = True
+
+                # Patch via _ug_mod module-level attrs that are named compute_loss
+                for _attr_name in list(vars(_ug_mod)):
+                    _attr = vars(_ug_mod)[_attr_name]
+                    if callable(_attr) and getattr(_attr, "__name__", None) == "compute_loss":
+                        _exec_gal2 = getattr(_attr, "__globals__", {}).get("grpo_accumulated_loss")
+                        if _exec_gal2 and not getattr(_exec_gal2, "_compat5_patched", False):
+                            _compat_gal2 = _make_compat_gal(_exec_gal2)
+                            _attr.__globals__["grpo_accumulated_loss"] = _compat_gal2
+                            print(f"[dbg] Patched via _ug_mod.{_attr_name}.__globals__")
+                            _patched = True
+
+                if not _patched:
+                    print("[dbg] No patch location found — grpo_accumulated_loss is a closure or unreachable")
+
+            except Exception as _pe:
+                import traceback as _tb; _tb.print_exc()
+
         print("\n── GRPO training ──")
         import torch._dynamo
         torch._dynamo.disable(trainer.train)()  # disables Dynamo for train + all nested calls
