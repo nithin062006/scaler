@@ -14,18 +14,18 @@ step()    The agent emits one RepoEditAction per turn:
           - submit      → materialise all changes back to disk (temp), run tests,
                           compute reward, end episode
 
-Reward structure (sparse — designed for long-horizon RL)
----------------------------------------------------------
-  Per-turn cost    : -0.05   (forces efficiency)
-  Malformed action : -0.2
-  On submit
-    all tests pass : +1.0
-    partial pass   : +0.5 * (n_pass / n_total)
-    compile error  : 0.0
-  Episode cap hit  : 0.0
+Reward structure (graduated — matches training/train.py reward_fn)
+------------------------------------------------------------------
+  Valid query / inspect (executed OK)  : +0.10
+  Valid add_node / update_node (OK)    : +0.20
+  Submit — tests fail                  : +0.00
+  Submit — all tests pass              : +0.90
+  Malformed / execution error          : −0.10
 
-This sparse reward deliberately requires the agent to plan, navigate, and
-execute across many turns — it cannot succeed by guessing on the first turn.
+  Pre-parse tiers (handled in training/train.py reward_fn only):
+    No action structure in completion  : −0.10
+    Has structure but unparseable JSON : +0.02
+    Valid JSON, unrecognised kind       : +0.05
 """
 
 from __future__ import annotations
@@ -75,8 +75,11 @@ except Exception:
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
-PER_TURN_COST = -0.05
-MALFORMED_PENALTY = -0.2
+QUERY_REWARD    =  0.10
+MUTATION_REWARD =  0.20
+SUBMIT_PASS     =  0.90
+SUBMIT_FAIL     =  0.00
+MALFORMED_PENALTY = -0.10
 
 
 # ── materialiser (graph → disk) ───────────────────────────────────────────────
@@ -241,15 +244,15 @@ class RepoEditEnvironment(
             return self._terminal_obs("Episode already done."), 0.0, True
 
         self._turn += 1
-        turn_reward = PER_TURN_COST
+        turn_reward = 0.0
 
         # Dispatch
         try:
             result_text, extra_reward, done = self._dispatch(action)
-            turn_reward += extra_reward
+            turn_reward = extra_reward
         except Exception as exc:
             result_text = f"[ERROR] {exc}"
-            turn_reward += MALFORMED_PENALTY
+            turn_reward = MALFORMED_PENALTY
             done = False
 
         self._total_reward += turn_reward
@@ -306,15 +309,15 @@ class RepoEditEnvironment(
             nt = None if action.node_type == "all" else action.node_type
             results = kg.search(action.keywords, node_type=nt)
             if not results:
-                return f"No nodes found for query: {action.keywords!r}", 0.0, False
+                return f"No nodes found for query: {action.keywords!r}", QUERY_REWARD, False
             lines = [f"Found {len(results)} node(s) matching {action.keywords!r}:"]
             for n in results[:10]:
                 lines.append(f"  {n.node_id}  ({n.file_path}:{n.line_start})")
-            return "\n".join(lines), 0.0, False
+            return "\n".join(lines), QUERY_REWARD, False
 
         if isinstance(action, InspectAction):
             detail = kg.node_detail(action.node_id)
-            return detail, 0.0, False
+            return detail, QUERY_REWARD, False
 
         if isinstance(action, AddNodeAction):
             parent = kg.get_node(action.parent_id)
@@ -346,7 +349,7 @@ class RepoEditEnvironment(
                 source=textwrap.dedent(action.code).strip(),
             )
             kg.insert_node(action.parent_id, new_node)
-            return f"Added {ntype} `{action.name}` to `{module_node.file_path}`.\nNew node_id: {new_id}", 0.0, False
+            return f"Added {ntype} `{action.name}` to `{module_node.file_path}`.\nNew node_id: {new_id}", MUTATION_REWARD, False
 
         if isinstance(action, UpdateNodeAction):
             target = kg.get_node(action.node_id)
@@ -363,7 +366,7 @@ class RepoEditEnvironment(
             old_source = target.source
             module_node.source = _apply_update_node(module_node.source, old_source, action.new_code)
             target.source = textwrap.dedent(action.new_code).strip()
-            return f"Updated `{action.node_id}`.", 0.0, False
+            return f"Updated `{action.node_id}`.", MUTATION_REWARD, False
 
         if isinstance(action, RemoveNodeAction):
             target = kg.get_node(action.node_id)
@@ -373,7 +376,7 @@ class RepoEditEnvironment(
             if module_node:
                 module_node.source = _apply_remove_node(module_node.source, target.source)
             kg.remove_node(action.node_id)
-            return f"Removed `{action.node_id}`.", 0.0, False
+            return f"Removed `{action.node_id}`.", QUERY_REWARD, False
 
         if isinstance(action, SubmitAction):
             return self._run_submit()
@@ -450,11 +453,11 @@ def _run_tests_in_tempdir(
         sys.path.insert(0, tmpdir)
         try:
             exec(compile(test_code, "<tests>", "exec"), {})  # noqa: S102
-            return 1.0, "✓ All tests passed!"
+            return SUBMIT_PASS, "✓ All tests passed!"
         except AssertionError as exc:
-            return 0.0, f"✗ Test failed: {exc}"
+            return SUBMIT_FAIL, f"✗ Test failed: {exc}"
         except Exception:
-            return 0.0, f"✗ Exception during tests:\n{traceback.format_exc(limit=5)}"
+            return SUBMIT_FAIL, f"✗ Exception during tests:\n{traceback.format_exc(limit=5)}"
         finally:
             sys.path.remove(tmpdir)
             stale = [k for k in sys.modules if k == pkg_name or k.startswith(pkg_name + ".")]
