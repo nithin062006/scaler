@@ -415,29 +415,30 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
 
                 # Bug 2: backwards-compat branch does a 5-var unpack of
                 # grpo_accumulated_loss() which now returns 6 values.
-                # compute_loss lives in a private exec-namespace (not _ug_mod.__dict__),
-                # so we must patch compute_loss.__globals__ directly.
-                # Unsloth replaces compute_loss on every model load, clearing any
-                # previous exec-globals patch — so always re-apply it unconditionally.
-                _gal = _ug_mod.grpo_accumulated_loss
-                if not getattr(_gal, "_compat5_patched", False):
-                    _orig_gal = _gal
-                    def _compat_gal(*args, **kwargs):
-                        r = _orig_gal(*args, **kwargs)
-                        return tuple(r)[:5] if isinstance(r, (tuple, list)) and len(r) > 5 else r
-                    _compat_gal._compat5_patched = True
-                    _ug_mod.grpo_accumulated_loss = _compat_gal
-                    _gal = _compat_gal
-
-                # Always re-patch GRPOTrainer.compute_loss exec-globals
-                # (Unsloth overwrites GRPOTrainer.compute_loss on each model load)
-                from trl import GRPOTrainer as _GT
-                _cl_fn = _GT.__dict__.get("compute_loss")
-                if _cl_fn and callable(_cl_fn) and hasattr(_cl_fn, "__globals__"):
-                    _cl_fn.__globals__["grpo_accumulated_loss"] = _gal
-                    print("Patched grpo_accumulated_loss in compute_loss exec-globals")
+                # compute_loss is exec()'d into a private namespace — NOT in
+                # GRPOTrainer.__dict__ and NOT sharing _ug_mod.__dict__ as its
+                # globals.  The only reliable path is:
+                #   _ug_mod.compute_loss.__globals__['grpo_accumulated_loss']
+                # which IS the exec-namespace the function actually uses.
+                _cl = getattr(_ug_mod, "compute_loss", None)
+                if _cl and callable(_cl) and hasattr(_cl, "__globals__"):
+                    _exec_gal = _cl.__globals__.get("grpo_accumulated_loss")
+                    if _exec_gal and not getattr(_exec_gal, "_compat5_patched", False):
+                        _orig_gal = _exec_gal
+                        def _compat_gal(*args, **kwargs):
+                            r = _orig_gal(*args, **kwargs)
+                            return tuple(r)[:5] if isinstance(r, (tuple, list)) and len(r) > 5 else r
+                        _compat_gal._compat5_patched = True
+                        _cl.__globals__["grpo_accumulated_loss"] = _compat_gal
+                        _ug_mod.grpo_accumulated_loss = _compat_gal  # keep module in sync
+                        print("Patched grpo_accumulated_loss in compute_loss exec-namespace")
+                    elif _exec_gal:
+                        pass  # already patched (same kernel session, same exec-ns)
+                    else:
+                        _keys = list(_cl.__globals__.keys())[:15]
+                        print(f"[warn] grpo_accumulated_loss missing from exec-ns (sample keys: {_keys})")
                 else:
-                    print(f"[warn] compute_loss not in GRPOTrainer.__dict__ (keys: {[k for k in _GT.__dict__ if 'loss' in k.lower()]})")
+                    print(f"[warn] _ug_mod has no compute_loss attr")
 
             except Exception as _pe:
                 print(f"[warn] Unsloth cache patch skipped: {_pe}")
