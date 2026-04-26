@@ -385,17 +385,34 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             max_completion_length=cfg.max_completion_length,
             temperature=cfg.temperature,
             gradient_checkpointing=False,
+            beta=0.0,  # no KL penalty; avoids ref_logps computation in TRL
             logging_steps=1,
             save_steps=50,
             report_to="none",
             seed=cfg.seed,
         )
-        # Unsloth's compiled grpo_compute_loss expects non-None ref_logps.
-        # For PEFT/LoRA models without an explicit ref_model, pass the base
-        # model so Unsloth can compute reference logprobs via the frozen base.
-        ref_model = None
-        if _USE_UNSLOTH and cfg.use_lora and hasattr(model, "get_base_model"):
-            ref_model = model.get_base_model()
+
+        # Unsloth bug: grpo_compute_loss always runs `torch.exp(ref - new)`
+        # even when beta=0 causes TRL to set ref_logps=None.  Patch the
+        # module-global before Dynamo first traces accumulate_chunk so the
+        # compiled graph gets ref = new.detach() → KL = exp(0)-0-1 = 0.
+        if _USE_UNSLOTH:
+            try:
+                import unsloth_compiled_cache.UnslothGRPOTrainer as _ug_mod
+                if not getattr(_ug_mod.grpo_compute_loss, "_ref_none_patched", False):
+                    _orig_gcc = _ug_mod.grpo_compute_loss
+                    def _safe_gcc(*args, **kwargs):
+                        # positional: new=0, old=1, ref=2
+                        if len(args) >= 3 and args[2] is None:
+                            _a = list(args)
+                            _a[2] = _a[0].detach()  # ref = new → KL = 0
+                            args = tuple(_a)
+                        return _orig_gcc(*args, **kwargs)
+                    _safe_gcc._ref_none_patched = True
+                    _ug_mod.grpo_compute_loss = _safe_gcc
+                    print("Patched grpo_compute_loss for None ref_logps")
+            except Exception as _pe:
+                print(f"[warn] grpo_compute_loss patch skipped: {_pe}")
 
         trainer = GRPOTrainer(
             model=model,
@@ -403,7 +420,6 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             args=grpo_cfg,
             train_dataset=dataset,
             processing_class=tokenizer,
-            **({"ref_model": ref_model} if ref_model is not None else {}),
         )
         print("\n── GRPO training ──")
         import torch._dynamo
