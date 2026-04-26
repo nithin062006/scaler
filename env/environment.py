@@ -75,11 +75,20 @@ except Exception:
 
 # ── constants ─────────────────────────────────────────────────────────────────
 
-QUERY_REWARD    =  0.10
-MUTATION_REWARD =  0.20
-SUBMIT_PASS     =  0.90
-SUBMIT_FAIL     =  0.00
+_QUERY_REWARD_BASE =  0.10   # turn 1 query reward; decays by 0.01/turn, floor 0.01
+MUTATION_REWARD   =  0.20
+SUBMIT_PASS       =  0.90
+SUBMIT_FAIL       =  0.00
 MALFORMED_PENALTY = -0.10
+
+
+def _query_reward(turn: int) -> float:
+    """Decay query reward so spam is never globally optimal.
+
+    Turn 1 → 0.10, turn 5 → 0.06, turn 10 → 0.01
+    Solving in 3 turns (0.10+0.20+0.90=1.20) beats spamming 12 (≈0.58).
+    """
+    return max(_QUERY_REWARD_BASE - 0.01 * (turn - 1), 0.01)
 
 
 # ── materialiser (graph → disk) ───────────────────────────────────────────────
@@ -309,15 +318,15 @@ class RepoEditEnvironment(
             nt = None if action.node_type == "all" else action.node_type
             results = kg.search(action.keywords, node_type=nt)
             if not results:
-                return f"No nodes found for query: {action.keywords!r}", QUERY_REWARD, False
+                return f"No nodes found for query: {action.keywords!r}", _query_reward(self._turn), False
             lines = [f"Found {len(results)} node(s) matching {action.keywords!r}:"]
             for n in results[:10]:
                 lines.append(f"  {n.node_id}  ({n.file_path}:{n.line_start})")
-            return "\n".join(lines), QUERY_REWARD, False
+            return "\n".join(lines), _query_reward(self._turn), False
 
         if isinstance(action, InspectAction):
             detail = kg.node_detail(action.node_id)
-            return detail, QUERY_REWARD, False
+            return detail, _query_reward(self._turn), False
 
         if isinstance(action, AddNodeAction):
             parent = kg.get_node(action.parent_id)
@@ -376,7 +385,7 @@ class RepoEditEnvironment(
             if module_node:
                 module_node.source = _apply_remove_node(module_node.source, target.source)
             kg.remove_node(action.node_id)
-            return f"Removed `{action.node_id}`.", QUERY_REWARD, False
+            return f"Removed `{action.node_id}`.", _query_reward(self._turn), False
 
         if isinstance(action, SubmitAction):
             return self._run_submit()
