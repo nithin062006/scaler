@@ -392,27 +392,45 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             seed=cfg.seed,
         )
 
-        # Unsloth bug: grpo_compute_loss always runs `torch.exp(ref - new)`
-        # even when beta=0 causes TRL to set ref_logps=None.  Patch the
-        # module-global before Dynamo first traces accumulate_chunk so the
-        # compiled graph gets ref = new.detach() → KL = exp(0)-0-1 = 0.
+        # Unsloth compiled-cache bug fixes (both patches use the same mechanism:
+        # Python looks up module globals dynamically at call time, so replacing
+        # a function in _ug_mod's globals is picked up by all callers in that module).
         if _USE_UNSLOTH:
             try:
                 import unsloth_compiled_cache.UnslothGRPOTrainer as _ug_mod
+
+                # Bug 1: grpo_compute_loss crashes when ref=None (beta=0 case).
+                # ref = new.detach() → KL = exp(0)-0-1 = 0 everywhere.
                 if not getattr(_ug_mod.grpo_compute_loss, "_ref_none_patched", False):
                     _orig_gcc = _ug_mod.grpo_compute_loss
                     def _safe_gcc(*args, **kwargs):
-                        # positional: new=0, old=1, ref=2
                         if len(args) >= 3 and args[2] is None:
                             _a = list(args)
-                            _a[2] = _a[0].detach()  # ref = new → KL = 0
+                            _a[2] = _a[0].detach()
                             args = tuple(_a)
                         return _orig_gcc(*args, **kwargs)
                     _safe_gcc._ref_none_patched = True
                     _ug_mod.grpo_compute_loss = _safe_gcc
                     print("Patched grpo_compute_loss for None ref_logps")
+
+                # Bug 2: backwards-compat branch in compute_loss does a 5-var
+                # unpack of grpo_accumulated_loss(), which now returns 6 values.
+                # The backwards-compat branch is the only caller of this function
+                # (the newer main path uses a different call path), so truncating
+                # to 5 is safe for plain-text GRPO.
+                if not getattr(_ug_mod.grpo_accumulated_loss, "_compat5_patched", False):
+                    _orig_gal = _ug_mod.grpo_accumulated_loss
+                    def _compat_gal(*args, **kwargs):
+                        r = _orig_gal(*args, **kwargs)
+                        if isinstance(r, (tuple, list)) and len(r) > 5:
+                            return tuple(r)[:5]
+                        return r
+                    _compat_gal._compat5_patched = True
+                    _ug_mod.grpo_accumulated_loss = _compat_gal
+                    print("Patched grpo_accumulated_loss for 5-var compat unpack")
+
             except Exception as _pe:
-                print(f"[warn] grpo_compute_loss patch skipped: {_pe}")
+                print(f"[warn] Unsloth cache patch skipped: {_pe}")
 
         trainer = GRPOTrainer(
             model=model,
