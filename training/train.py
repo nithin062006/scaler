@@ -398,7 +398,8 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             processing_class=tokenizer,
         )
         print("\n── GRPO training ──")
-        trainer.train()
+        import torch._dynamo
+        torch._dynamo.disable(trainer.train)()  # disables Dynamo for train + all nested calls
         for entry in trainer.state.log_history:
             if "reward" in entry or "loss" in entry:
                 training_history.append(entry)
