@@ -302,6 +302,11 @@ def load_model_and_tokenizer(cfg: TrainConfig) -> tuple[Any, Any]:
                 task_type=TaskType.CAUSAL_LM,
             ))
             model.print_trainable_parameters()
+            # transformers>=4.57 requires _gradient_checkpointing_func to be set
+            # before any forward pass when gradient_checkpointing is True on layers.
+            model.gradient_checkpointing_enable(
+                gradient_checkpointing_kwargs={"use_reentrant": False}
+            )
         print(f"Loaded on {device}")
 
     return model, tokenizer
