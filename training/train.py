@@ -390,12 +390,20 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             report_to="none",
             seed=cfg.seed,
         )
+        # Unsloth's compiled grpo_compute_loss expects non-None ref_logps.
+        # For PEFT/LoRA models without an explicit ref_model, pass the base
+        # model so Unsloth can compute reference logprobs via the frozen base.
+        ref_model = None
+        if _USE_UNSLOTH and cfg.use_lora and hasattr(model, "get_base_model"):
+            ref_model = model.get_base_model()
+
         trainer = GRPOTrainer(
             model=model,
             reward_funcs=reward_fn,
             args=grpo_cfg,
             train_dataset=dataset,
             processing_class=tokenizer,
+            **({"ref_model": ref_model} if ref_model is not None else {}),
         )
         print("\n── GRPO training ──")
         import torch._dynamo
