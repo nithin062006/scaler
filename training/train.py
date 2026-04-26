@@ -416,6 +416,17 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             processing_class=tokenizer,
         )
 
+        # Unsloth compiled cache references self.loss_type / self.epsilon_low / self.epsilon_high
+        # which may not be set when using an older GRPOConfig that lacked these fields.
+        if not hasattr(trainer, "loss_type"):
+            trainer.loss_type = "grpo"
+            print("[patch] Set trainer.loss_type = 'grpo'")
+        if not hasattr(trainer, "epsilon_low"):
+            _eps = getattr(grpo_cfg, "epsilon", 0.2)
+            trainer.epsilon_low = _eps
+            trainer.epsilon_high = _eps
+            print(f"[patch] Set trainer.epsilon_low/high = {_eps}")
+
         # Bug 2 patch: done AFTER trainer creation so we can walk type(trainer).__mro__
         # to find the actual compute_loss function and its exec-namespace.
         if _USE_UNSLOTH:
