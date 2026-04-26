@@ -460,7 +460,15 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
                 def _make_compat_gal(orig):
                     def _compat(*a, **kw):
                         r = orig(*a, **kw)
-                        return tuple(r)[:5] if isinstance(r, (tuple, list)) and len(r) > 5 else r
+                        if not (isinstance(r, (tuple, list)) and len(r) >= 6):
+                            return r
+                        # Semantic remap:
+                        # new: (loss, completion_length, mean_kl, delta, flat_is_ratio, coef_1)
+                        # old: (loss, completion_length, mean_kl, coef_1, completion_mask)
+                        # completion_mask must support .sum(); flat_is_ratio may be None,
+                        # so fall back to completion_length (r[1]) as a non-None tensor proxy.
+                        _mask = r[4] if r[4] is not None else r[1]
+                        return (r[0], r[1], r[2], r[5], _mask)
                     _compat._compat5_patched = True
                     return _compat
 
