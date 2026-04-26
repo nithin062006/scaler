@@ -427,6 +427,19 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             trainer.epsilon_high = _eps
             print(f"[patch] Set trainer.epsilon_low/high = {_eps}")
 
+        # Ensure _metrics uses the nested {"train": ..., "eval": ...} structure.
+        # The compiled cache at line 2402 checks `if "train" in self._metrics` to assign `mode`.
+        # If _metrics is the old flat structure (no "train" key), mode is never assigned
+        # but later code at line 2485 uses it unconditionally → UnboundLocalError.
+        import collections as _col
+        if not hasattr(trainer, "_metrics") or "train" not in trainer._metrics:
+            _existing = dict(getattr(trainer, "_metrics", {}))
+            trainer._metrics = {
+                "train": _col.defaultdict(list, _existing),
+                "eval":  _col.defaultdict(list),
+            }
+            print("[patch] Restructured _metrics to nested {'train':…,'eval':…}")
+
         # Bug 2 patch: done AFTER trainer creation so we can walk type(trainer).__mro__
         # to find the actual compute_loss function and its exec-namespace.
         if _USE_UNSLOTH:
