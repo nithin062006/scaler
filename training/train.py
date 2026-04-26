@@ -472,16 +472,15 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
                     _compat._compat5_patched = True
                     return _compat
 
-                # Patch via MRO class
+                # Patch via MRO class — ALWAYS re-apply so stale wrappers from
+                # a previous run (same kernel session) get the updated mapping.
+                # Double-wrapping is safe: outer wrapper sees len<6 and passes through.
                 if _cl_fn and callable(_cl_fn) and hasattr(_cl_fn, "__globals__"):
                     _exec_gal = _cl_fn.__globals__.get("grpo_accumulated_loss")
-                    if _exec_gal and not getattr(_exec_gal, "_compat5_patched", False):
+                    if _exec_gal:
                         _compat_gal = _make_compat_gal(_exec_gal)
                         _cl_fn.__globals__["grpo_accumulated_loss"] = _compat_gal
-                        print("[dbg] Patched via MRO-class compute_loss.__globals__")
-                        _patched = True
-                    elif _exec_gal:
-                        print("[dbg] MRO compute_loss.__globals__['grpo_accumulated_loss'] already patched")
+                        print("[dbg] Patched grpo_accumulated_loss in compute_loss exec-ns")
                         _patched = True
 
                 # Patch via _ug_mod module-level attrs that are named compute_loss
