@@ -379,6 +379,7 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             num_generations=cfg.num_generations,
             max_completion_length=cfg.max_completion_length,
             temperature=cfg.temperature,
+            gradient_checkpointing=False,
             logging_steps=1,
             save_steps=50,
             report_to="none",
