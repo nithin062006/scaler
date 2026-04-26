@@ -427,18 +427,31 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
             trainer.epsilon_high = _eps
             print(f"[patch] Set trainer.epsilon_low/high = {_eps}")
 
-        # Ensure _metrics uses the nested {"train": ..., "eval": ...} structure.
-        # The compiled cache at line 2402 checks `if "train" in self._metrics` to assign `mode`.
-        # If _metrics is the old flat structure (no "train" key), mode is never assigned
-        # but later code at line 2485 uses it unconditionally → UnboundLocalError.
+        # The compiled cache is internally inconsistent:
+        #   _prepare_inputs (line 2181) uses flat  self._metrics["rewards/..."]
+        #   compute_loss    (line 2402) checks      "train" in self._metrics → sets mode
+        #   compute_loss    (line 2485) uses nested self._metrics[mode]["clip_ratio/..."]
+        # Neither a pure flat nor a pure nested dict satisfies both.
+        # Solution: HybridMetrics — has "train"/"eval" sub-dicts for the nested API,
+        # and routes unknown flat keys to self["train"] via __missing__.
         import collections as _col
-        if not hasattr(trainer, "_metrics") or "train" not in trainer._metrics:
-            _existing = dict(getattr(trainer, "_metrics", {}))
-            trainer._metrics = {
-                "train": _col.defaultdict(list, _existing),
-                "eval":  _col.defaultdict(list),
-            }
-            print("[patch] Restructured _metrics to nested {'train':…,'eval':…}")
+
+        class _HybridMetrics(dict):
+            def __init__(self):
+                super().__init__()
+                super().__setitem__("train", _col.defaultdict(list))
+                super().__setitem__("eval",  _col.defaultdict(list))
+            def __missing__(self, key):
+                return super().__getitem__("train")[key]
+
+        if not isinstance(getattr(trainer, "_metrics", None), _HybridMetrics):
+            _old = getattr(trainer, "_metrics", {})
+            _hm = _HybridMetrics()
+            for _k, _v in (_old if isinstance(_old, dict) else {}).items():
+                if _k not in ("train", "eval"):
+                    _hm["train"][_k] = _v if isinstance(_v, list) else list(_v)
+            trainer._metrics = _hm
+            print("[patch] Set _metrics to HybridMetrics (flat+nested)")
 
         # Bug 2 patch: done AFTER trainer creation so we can walk type(trainer).__mro__
         # to find the actual compute_loss function and its exec-namespace.
