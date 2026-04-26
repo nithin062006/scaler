@@ -437,12 +437,26 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
         import collections as _col
 
         class _HybridMetrics(dict):
+            """Satisfies three incompatible APIs in Unsloth compiled cache:
+            - _prepare_inputs: flat  self._metrics["rewards/x"].append(v)
+            - compute_loss:   checks "train" in self._metrics, then self._metrics["train"]["x"]
+            - log():          sum(val)/len(val) for key,val in self._metrics.items()
+            """
             def __init__(self):
                 super().__init__()
                 super().__setitem__("train", _col.defaultdict(list))
                 super().__setitem__("eval",  _col.defaultdict(list))
             def __missing__(self, key):
+                # Flat key read (old API) → delegates to self["train"]
                 return super().__getitem__("train")[key]
+            def items(self):
+                # log() iterates items() expecting {str: [float,...]}
+                # Yield from self["train"] — that's where all metrics land
+                return super().__getitem__("train").items()
+            def clear(self):
+                # Unsloth resets _metrics between steps; preserve train/eval sub-dicts
+                super().__getitem__("train").clear()
+                super().__getitem__("eval").clear()
 
         if not isinstance(getattr(trainer, "_metrics", None), _HybridMetrics):
             _old = getattr(trainer, "_metrics", {})
