@@ -107,7 +107,11 @@ def run_episode(
 
 
 def _generate(model: Any, tokenizer: Any, prompt: str, cfg: TrainConfig) -> str:
-    inputs = tokenizer(prompt, return_tensors="pt")
+    max_prompt_tokens = 2048 - cfg.max_completion_length
+    inputs = tokenizer(
+        prompt, return_tensors="pt",
+        truncation=True, max_length=max_prompt_tokens,
+    )
     device = next(model.parameters()).device
     inputs = {k: v.to(device) for k, v in inputs.items()}
     with torch.no_grad():

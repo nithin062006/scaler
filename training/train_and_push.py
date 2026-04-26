@@ -8,12 +8,66 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 sys.path.insert(0, "/app")
 
+# Shared state updated by training thread; read by HTTP handler
+_status: dict = {"phase": "starting", "baseline": None, "trained": None, "pass_rate": None}
+
+
+class _Handler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        phase = _status["phase"]
+        baseline = _status["baseline"]
+        trained = _status["trained"]
+        pass_rate = _status["pass_rate"]
+
+        if phase == "done" and trained is not None:
+            body = f"""<!DOCTYPE html><html><body style="font-family:monospace;padding:2rem">
+<h2>GraphForge GRPO Training — Complete</h2>
+<table border=1 cellpadding=8>
+<tr><th>Metric</th><th>Value</th></tr>
+<tr><td>Baseline mean reward</td><td>{baseline:.3f}</td></tr>
+<tr><td>Trained mean reward</td><td>{trained:.3f}</td></tr>
+<tr><td>Delta</td><td>{trained - baseline:+.3f}</td></tr>
+<tr><td>Pass rate</td><td>{pass_rate:.1%}</td></tr>
+</table>
+<p>LoRA weights: <a href="https://huggingface.co/nithin04/graphforge-lora">nithin04/graphforge-lora</a></p>
+</body></html>"""
+        else:
+            body = f"""<!DOCTYPE html><html><head>
+<meta http-equiv="refresh" content="30">
+</head><body style="font-family:monospace;padding:2rem">
+<h2>GraphForge GRPO Training — In Progress</h2>
+<p>Phase: <strong>{phase}</strong></p>
+<p>This page refreshes every 30 seconds.</p>
+</body></html>"""
+
+        encoded = body.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(encoded)))
+        self.end_headers()
+        self.wfile.write(encoded)
+
+    def log_message(self, *_):
+        pass
+
+
+def _start_server() -> None:
+    server = HTTPServer(("0.0.0.0", 7860), _Handler)
+    print("Status server listening on :7860")
+    server.serve_forever()
+
 
 def main() -> None:
+    # Start HTTP server immediately so HF Space health check passes
+    t = threading.Thread(target=_start_server, daemon=True)
+    t.start()
+
     from training.config import TrainConfig
     from training.train import run
 
@@ -41,10 +95,15 @@ def main() -> None:
     print("GraphForge GRPO Training — HF Space")
     print("=" * 60)
 
+    _status["phase"] = "baseline eval"
     summary = run(cfg)
+
     baseline_mean = summary["baseline"]["mean"]
     trained_mean  = summary["trained"]["mean"]
     pass_rate     = summary["trained"]["pass_rate"]
+
+    _status.update({"phase": "done", "baseline": baseline_mean,
+                    "trained": trained_mean, "pass_rate": pass_rate})
 
     print(f"\nBaseline → {baseline_mean:.3f}")
     print(f"Trained  → {trained_mean:.3f}")
@@ -77,7 +136,6 @@ def main() -> None:
             )
             print(f"\nModel pushed to hf.co/{repo_id}")
 
-        # Save summary
         (out_dir / "summary.json").write_text(json.dumps({
             "baseline": baseline_mean,
             "trained": trained_mean,
@@ -87,37 +145,8 @@ def main() -> None:
     else:
         print("\nHF_TOKEN not set — model not pushed to Hub")
 
-    # Serve a simple status page so the Space stays alive
-    _serve_status(baseline_mean, trained_mean, pass_rate)
-
-
-def _serve_status(baseline: float, trained: float, pass_rate: float) -> None:
-    from http.server import BaseHTTPRequestHandler, HTTPServer
-
-    html = f"""<!DOCTYPE html><html><body style="font-family:monospace;padding:2rem">
-<h2>GraphForge GRPO Training — Complete</h2>
-<table border=1 cellpadding=8>
-<tr><th>Metric</th><th>Value</th></tr>
-<tr><td>Baseline mean reward</td><td>{baseline:.3f}</td></tr>
-<tr><td>Trained mean reward</td><td>{trained:.3f}</td></tr>
-<tr><td>Delta</td><td>{trained - baseline:+.3f}</td></tr>
-<tr><td>Pass rate</td><td>{pass_rate:.1%}</td></tr>
-</table>
-<p>LoRA weights: <a href="https://huggingface.co/nithin04/graphforge-lora">nithin04/graphforge-lora</a></p>
-</body></html>"""
-
-    class Handler(BaseHTTPRequestHandler):
-        def do_GET(self) -> None:
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html")
-            self.end_headers()
-            self.wfile.write(html.encode())
-
-        def log_message(self, *_):  # silence request logs
-            pass
-
-    print("Training complete — serving status at :7860")
-    HTTPServer(("0.0.0.0", 7860), Handler).serve_forever()
+    # Keep main thread alive (daemon server thread will die if main exits)
+    t.join()
 
 
 if __name__ == "__main__":
