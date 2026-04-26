@@ -415,9 +415,9 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
 
                 # Bug 2: backwards-compat branch in compute_loss does a 5-var
                 # unpack of grpo_accumulated_loss(), which now returns 6 values.
-                # The backwards-compat branch is the only caller of this function
-                # (the newer main path uses a different call path), so truncating
-                # to 5 is safe for plain-text GRPO.
+                # IMPORTANT: compute_loss was exec'd by Unsloth in a private
+                # namespace, so its __globals__ != _ug_mod.__dict__.  We must
+                # patch compute_loss.__globals__ directly, not just the module.
                 if not getattr(_ug_mod.grpo_accumulated_loss, "_compat5_patched", False):
                     _orig_gal = _ug_mod.grpo_accumulated_loss
                     def _compat_gal(*args, **kwargs):
@@ -426,8 +426,16 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
                             return tuple(r)[:5]
                         return r
                     _compat_gal._compat5_patched = True
-                    _ug_mod.grpo_accumulated_loss = _compat_gal
-                    print("Patched grpo_accumulated_loss for 5-var compat unpack")
+                    _ug_mod.grpo_accumulated_loss = _compat_gal  # for module callers
+
+                    # Patch the exec-namespace that compute_loss actually uses
+                    from trl import GRPOTrainer as _GT
+                    _cl_fn = _GT.__dict__.get("compute_loss")
+                    if _cl_fn and callable(_cl_fn) and hasattr(_cl_fn, "__globals__"):
+                        _cl_fn.__globals__["grpo_accumulated_loss"] = _compat_gal
+                        print("Patched grpo_accumulated_loss in compute_loss exec-globals")
+                    else:
+                        print("Patched grpo_accumulated_loss (module only — compute_loss not found in GRPOTrainer.__dict__)")
 
             except Exception as _pe:
                 print(f"[warn] Unsloth cache patch skipped: {_pe}")
