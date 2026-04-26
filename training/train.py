@@ -360,6 +360,15 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
     else:
         from trl import GRPOConfig, GRPOTrainer  # type: ignore
 
+        # transformers>=4.57 passes `dataset` to _get_train_sampler; TRL's
+        # version only accepts `self` — wrap once to accept the extra arg.
+        if not getattr(GRPOTrainer._get_train_sampler, "_is_patched", False):
+            _orig_gts = GRPOTrainer._get_train_sampler
+            def _gts_compat(self, dataset=None):
+                return _orig_gts(self)
+            _gts_compat._is_patched = True
+            GRPOTrainer._get_train_sampler = _gts_compat
+
         dataset = build_grpo_dataset(tokenizer, cfg)
         grpo_cfg = GRPOConfig(
             output_dir=str(cfg.out_dir / "grpo_checkpoint"),
