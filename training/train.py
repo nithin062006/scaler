@@ -413,29 +413,31 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
                     _ug_mod.grpo_compute_loss = _safe_gcc
                     print("Patched grpo_compute_loss for None ref_logps")
 
-                # Bug 2: backwards-compat branch in compute_loss does a 5-var
-                # unpack of grpo_accumulated_loss(), which now returns 6 values.
-                # IMPORTANT: compute_loss was exec'd by Unsloth in a private
-                # namespace, so its __globals__ != _ug_mod.__dict__.  We must
-                # patch compute_loss.__globals__ directly, not just the module.
-                if not getattr(_ug_mod.grpo_accumulated_loss, "_compat5_patched", False):
-                    _orig_gal = _ug_mod.grpo_accumulated_loss
+                # Bug 2: backwards-compat branch does a 5-var unpack of
+                # grpo_accumulated_loss() which now returns 6 values.
+                # compute_loss lives in a private exec-namespace (not _ug_mod.__dict__),
+                # so we must patch compute_loss.__globals__ directly.
+                # Unsloth replaces compute_loss on every model load, clearing any
+                # previous exec-globals patch — so always re-apply it unconditionally.
+                _gal = _ug_mod.grpo_accumulated_loss
+                if not getattr(_gal, "_compat5_patched", False):
+                    _orig_gal = _gal
                     def _compat_gal(*args, **kwargs):
                         r = _orig_gal(*args, **kwargs)
-                        if isinstance(r, (tuple, list)) and len(r) > 5:
-                            return tuple(r)[:5]
-                        return r
+                        return tuple(r)[:5] if isinstance(r, (tuple, list)) and len(r) > 5 else r
                     _compat_gal._compat5_patched = True
-                    _ug_mod.grpo_accumulated_loss = _compat_gal  # for module callers
+                    _ug_mod.grpo_accumulated_loss = _compat_gal
+                    _gal = _compat_gal
 
-                    # Patch the exec-namespace that compute_loss actually uses
-                    from trl import GRPOTrainer as _GT
-                    _cl_fn = _GT.__dict__.get("compute_loss")
-                    if _cl_fn and callable(_cl_fn) and hasattr(_cl_fn, "__globals__"):
-                        _cl_fn.__globals__["grpo_accumulated_loss"] = _compat_gal
-                        print("Patched grpo_accumulated_loss in compute_loss exec-globals")
-                    else:
-                        print("Patched grpo_accumulated_loss (module only — compute_loss not found in GRPOTrainer.__dict__)")
+                # Always re-patch GRPOTrainer.compute_loss exec-globals
+                # (Unsloth overwrites GRPOTrainer.compute_loss on each model load)
+                from trl import GRPOTrainer as _GT
+                _cl_fn = _GT.__dict__.get("compute_loss")
+                if _cl_fn and callable(_cl_fn) and hasattr(_cl_fn, "__globals__"):
+                    _cl_fn.__globals__["grpo_accumulated_loss"] = _gal
+                    print("Patched grpo_accumulated_loss in compute_loss exec-globals")
+                else:
+                    print(f"[warn] compute_loss not in GRPOTrainer.__dict__ (keys: {[k for k in _GT.__dict__ if 'loss' in k.lower()]})")
 
             except Exception as _pe:
                 print(f"[warn] Unsloth cache patch skipped: {_pe}")
