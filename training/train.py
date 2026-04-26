@@ -457,6 +457,18 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
                 # Now attempt the patch on every location we found
                 _patched = False
 
+                # Print lines around crash point so we can see what's at 2463
+                import os as _os
+                _cache_file = "unsloth_compiled_cache/UnslothGRPOTrainer.py"
+                if _os.path.exists(_cache_file):
+                    with open(_cache_file) as _cf:
+                        _clines = _cf.readlines()
+                    _lo, _hi = max(0, 2458-1), min(len(_clines), 2468)
+                    print(f"[dbg2463] lines {_lo+1}-{_hi} of compiled cache:")
+                    for _i, _l in enumerate(_clines[_lo:_hi], _lo+1):
+                        print(f"  {_i}: {_l.rstrip()}")
+
+                _printed_once = [False]
                 def _make_compat_gal(orig):
                     def _compat(*a, **kw):
                         r = orig(*a, **kw)
@@ -465,10 +477,14 @@ def run(cfg: TrainConfig) -> dict[str, Any]:
                         # Semantic remap:
                         # new: (loss, completion_length, mean_kl, delta, flat_is_ratio, coef_1)
                         # old: (loss, completion_length, mean_kl, coef_1, completion_mask)
-                        # completion_mask must support .sum(); flat_is_ratio may be None,
-                        # so fall back to completion_length (r[1]) as a non-None tensor proxy.
                         _mask = r[4] if r[4] is not None else r[1]
-                        return (r[0], r[1], r[2], r[5], _mask)
+                        result = (r[0], r[1], r[2], r[5], _mask)
+                        if not _printed_once[0]:
+                            _printed_once[0] = True
+                            print(f"[dbg_compat] first call return types: {[type(x).__name__ for x in result]}")
+                            print(f"[dbg_compat] any None: {[x is None for x in result]}")
+                            print(f"[dbg_compat] r[4]={type(r[4]).__name__} r[5]={type(r[5]).__name__}")
+                        return result
                     _compat._compat5_patched = True
                     return _compat
 
